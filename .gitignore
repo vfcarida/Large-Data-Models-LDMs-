@@ -1,0 +1,41 @@
+# Python Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter and IDEs
+.ipynb_checkpoints
+.vscode/
+.idea/
+
+# Data and Checkpoints (CRITICAL: Do not leak transactional data)
+data/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+lightning_logs/
+outputs/
+multirun/
+wandb/
+
+# OS Files
+.DS_Store
+Thumbs.db
