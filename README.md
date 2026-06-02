@@ -1,117 +1,108 @@
-# Large Structured-Data Models (LDMs) Research Lab
+# Large Data Models (LDMs) Research Lab
 
-An enterprise-grade repository and experimental playground for the ingestion, self-supervised pre-training, joint-fusion fine-tuning, and robust evaluation of **Large Structured-Data Models (LDMs)** applied to global transactional databases.
+![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
+![PyTorch Lightning](https://img.shields.io/badge/pytorch--lightning-2.1+-orange.svg)
+![Status](https://img.shields.io/badge/status-active_development-success.svg)
+
+Bem-vindo ao LDM Research Lab! Este repositório é uma plataforma corporativa e educacional projetada para pré-treinar (Self-Supervised) e especializar (Fine-Tuning) **Foundation Models para dados estruturados e transacionais**. 
+
+Enquanto LLMs (como GPT ou Claude) dominam a linguagem natural, os **LDMs (Large Data Models)** compreendem nativamente sequências numéricas, tabulares e temporais sem destruir a precisão matemática.
+
+> 🇧🇷 **Documentação em Português Disponível!** 
+> Para a equipe técnica brasileira, disponibilizamos guias didáticos completos sobre a teoria e a prática na pasta `/docs`.
 
 ---
 
-## 🌌 Architectural Overview & Core Paradigms
+## 🚀 Quick Start (Rodando seu primeiro modelo)
 
-Traditional Machine Learning models struggle to comprehend the complex, relational, and highly-dimensional nature of transactional logs. This repository implements state-of-the-art architectures designed specifically to treat transactions as multi-modal events.
+Se você não possui dados reais em mãos, não se preocupe. O repositório vem com um gerador de dados sintéticos completo.
+
+### 1. Instalação
+O projeto pode ser instalado localmente ou via Docker (recomendado para GPU).
+
+**Local:**
+```bash
+# Clone o repositório
+git clone <url-do-repo>
+cd Large-Data-Models-LDMs-
+
+# Instale em modo editável (requirements já inclusos no setup)
+pip install -e ".[viz,tracking]"
+```
+
+**Docker:**
+```bash
+docker build -t ldm-research -f docker/Dockerfile .
+docker run --gpus all -it ldm-research
+```
+
+### 2. Rodando o Pipeline Completo
+O comando abaixo irá:
+1. Gerar milhares de transações financeiras realistas (fraudáveis).
+2. Fazer o **pré-treinamento** não-supervisionado usando o objetivo LimiX.
+3. Fazer o **fine-tuning** para classificação binária (Fraude) usando DCNv2.
+4. Salvar os resultados, checkpoints e relatórios em `results/`.
+
+```bash
+# Execução rápida (CPU ou para testes de sanidade - 2 minutos)
+python src/main.py --config small
+
+# Execução completa corporativa (GPU recomendada)
+python src/main.py --config default
+```
+
+Após o fim da execução, abra o arquivo `results/metrics_report.md` para ver o AUC, F1-Score e outras métricas.
+
+---
+
+## 🧠 Arquitetura e Conceitos Principais
+
+A arquitetura do LDM baseia-se no estado-da-arte (TransactionGPT, PRAGMA, LimiX):
 
 ```mermaid
 graph TD
-    A[Transactional Source] -->|cuDF Parallel Ingestion| B[FinancialEventDataset]
-    B -->|Key-Value-Time Tokenization| C[MMTT Representation]
-    C -->|Dynamic Sequence Packing| D[MMTTTransformerEncoder]
-    D -->|Virtual Token Conditioning| E[Contextual User Embeddings]
-    E -->|DCNv2 Polynomial Fusion| F[End-to-End Fusion Layer]
-    F -->|Binary Prediction| G[Risk Decision / Score]
+    A[Transações MMTT] -->|Key-Value-Time Tokenization| B(MMTT Transformer Encoder)
+    B -->|Masked Modeling| C{Fase 1: Pré-treino SSL}
+    B -->|Token Pooling| D[Virtual Token / CLS Embedding]
+    D --> E[Fusão DCNv2]
+    F[Features do Bureau/Tabular] --> E
+    E -->|BCEWithLogits| G{Fase 2: Fine-tuning}
+    G --> H((Detecção de Fraude))
 ```
 
-### 1. Multi-Modal-Temporal-Tabular (MMTT) Transformers
-We model transaction histories not as raw text, but as chronological events containing high-cardinality categories, numerical scales, and descriptive text. 
-* **Key-Value-Time (KVT) Tokenization**: Prevents loss of precision. Keys (column categories) are mapped using dimensional index dictionaries, values (continuous quantities) are quantized/scaled, and times are encoded through temporal delta embeddings.
-* **Virtual Token Layer**: Prefixes sequence inputs with specialized latent dimensions (acting as continuous prompts). This fuses global user context (such as graph representations) and keeps self-attention complexity manageable without planifying metadata columns.
-
-### 2. Masked Joint-Distribution Modeling (LimiX)
-To learn stable schemas across static data profiles, the lab leverages a joint-distribution mask objective. 
-* **Heterogeneous Mask Schedule**: Combines random cell-level, column-level, and temporal block-level masks. This forces the model to capture non-trivial cross-feature correlations, ensuring extreme robustness to missing transactional data (imputation).
-
-### 3. Deep & Cross Network v2 (DCNv2) Fusion
-For final binary adaptation (such as Credit Risk Classification), the contextual representation from the Transformer backbone is fused with classic tabular variables (like credit bureau scores). DCNv2 utilizes explicit polynomial matrix multiplication to cross-breed features efficiently without manual engineering.
-
-### 4. Parameter-Efficient Fine-Tuning (PeFT) & Robustness
-* **LoRA (Low-Rank Adaptation)**: Injected directly into the Self-Attention projection weights (`in_proj_weight`, `out_proj`) to enable immediate fine-tuning of multi-billion parameter backbones without catastrophic forgetting.
-* **Strategic Shift Testing**: Simulates post-deployment evasion (Strategic Manipulation) using random data shifts and gradient-based adversarial perturbations (FGSM) on continuous inputs.
+1. **Tokenização KVT (Key-Value-Time)**: Transações não são texto. KVT separa a Categoria (embedding discreto), Valor (normalizado escalar) e Tempo (delta quantizado).
+2. **Pré-treinamento Masked Joint-Distribution (LimiX)**: Esconde partes heterogêneas dos dados. O modelo aprende a estrutura comportamental preenchendo as lacunas, sem precisar de rótulos humanos.
+3. **Fusão Polinomial (DCNv2)**: Para fine-tuning, fundimos as representações profundas do Transformer com *features* estáticas antigas (ex: Score do Serasa) usando interações matemáticas explícitas.
 
 ---
 
-## 📂 Repository Structure
+## 📚 Trilha de Aprendizado (Para a Equipe)
 
-```directory
-.
-├── configs/
-│   └── config.yaml             # Hydra declarative configurations (Model, Training, Benchmarks)
-├── docker/
-│   └── Dockerfile              # Development environment optimized for CUDA 12.1+ and MPI
-├── src/
-│   ├── data/
-│   │   └── mmtt_dataset.py     # cuDF-accelerated dataset and Dynamic Sequence Packing Collate
-│   ├── models/
-│   │   ├── transformer_backbone.py  # MMTT Transformer Encoder & Virtual Token Layer
-│   │   └── joint_fusion_network.py  # EndToEndFusionLayer using CrossNetworkV2 (DCNv2)
-│   ├── training/
-│   │   └── objectives.py       # NextTokenPredictionLoss & ContextConditionalMaskedLoss (LimiX)
-│   └── evaluation/
-│       ├── metrics.py          # Imbalanced F1-Score, AUC, and Imputation RMSE
-│       ├── strategic_shift_tester.py # Adversarial Evasion FGSM Shifts & LoRA Injection
-│       └── benchmarks.py       # Formal Testing Suite (V4FinBench, OpenML, TabArena, Adult)
-├── requirements.txt            # Python dependencies
-└── README.md                   # Repository documentation
-```
+Preparamos uma documentação passo-a-passo para garantir o nivelamento técnico de todos os envolvidos na iniciativa LDM.
+
+Recomendamos a leitura na seguinte ordem:
+
+1. 📖 [Fundamentos: O que são LDMs e por que não usar LLMs?](docs/01_fundamentos_ldm.md)
+2. 🧱 [Arquitetura MMTT: Tokenização Key-Value-Time](docs/02_arquitetura_mmtt.md)
+3. 🕵️‍♂️ [Pré-treinamento: Como o modelo aprende sozinho (LimiX)](docs/03_pretraining_limix.md)
+4. ⚙️ [Fine-tuning: Unindo Transformers e Features Clássicas (DCNv2)](docs/04_finetuning_dcnv2.md)
+5. 🛡️ [Avaliação e Robustez: Defesa contra atacantes e AUC](docs/05_avaliacao_robustez.md)
+6. 🔬 [Referências e Literatura Acadêmica Oficial](docs/references.md)
 
 ---
 
-## 🚀 Getting Started
+## 📂 Estrutura do Repositório (Executável)
 
-### 1. Prerequisites & Container Setup
-To leverage GPU acceleration via cuDF and compile custom FlashAttention CUDA kernels, it is highly recommended to run this repository inside the provided Docker environment.
+O código foi reestruturado de *conceitual* para um **Módulo Lightning End-to-End**.
 
-```bash
-# Build the Docker image
-docker build -t ldm-research-lab -f docker/Dockerfile .
-
-# Run the container mapping your GPU resources
-docker run --gpus all -it -p 8000:8000 ldm-research-lab
-```
-
-### 2. Local Installation (Alternative)
-Ensure you have CUDA 12+ and Python 3.10 installed on your host system:
-```bash
-pip install -r requirements.txt
-```
+*   `src/main.py`: Entrypoint único que orquestra todo o pipeline (Configurações via argparse).
+*   `src/data/`: `LDMDataModule`, Tokenização MMTT, e gerador de dados sintéticos hiper-realista.
+*   `src/models/`: Backbone do Transformer, Virtual Tokens, DCNv2, e o `LargeDataModel` principal.
+*   `src/training/`: Objetivos SSL (NTP, LimiX) e `LightningModules` com suporte a mixed-precision.
+*   `src/evaluation/`: Métricas resistentes a desbalanceamento (AUC, Flexible F1) e testes de stress Adversarial (FGSM).
+*   `configs/`: Hyperparâmetros organizados em presets (`default` e `small`).
 
 ---
 
-## 📈 Running Benchmarks and Evaluation
-
-The research lab includes a formal benchmarking suite to compare LDM performance against traditional gradient boosted trees (XGBoost) and zero-shot baselines.
-
-Supported Datasets:
-- **V4FinBench**: Evaluates multi-horizon corporate bankruptcy prediction under extreme class imbalance.
-- **OpenML-CC18 / TabArena**: Benchmarks generalist zero-shot and few-shot tabular classification.
-- **TALENT-REG**: Stability, regression, and mathematical interpretability testing.
-- **Adult / Bank Marketing**: Evaluates OOD stability and strategic behavior manipulation.
-
-To run the full suite:
-```bash
-python src/evaluation/benchmarks.py
-```
-
----
-
-## 📚 Academic & State-of-the-Art References
-
-Our codebase aligns with modern foundational research in structured deep learning:
-1. **TransactionGPT / 3D-Transformers**: Proponents of Key-Value-Time sequence alignment and the Virtual Token Layer structure for multi-modal payment data.
-2. **PRAGMA**: Large-scale next-event and next-token prediction over sequential financial histories.
-3. **LimiX**: Masked joint-distribution pre-training on tabular datasets with heterogeneous cell/block masking schedules.
-4. **LDM² (Large Decision Models)**: Dynamic reinforcement learning loops utilizing exploratory trees and dynamic state-action memory refinement under uncertainty.
-5. **SQL Data Insights (B+ANN)**: In-Database semantic similarity search and operations (e.g., `AI_SIMILARITY`, `AI_COMMONALITY`) native to mainframe engines.
-6. **TabPFN v2 / KernelICL**: In-Context Learning for tabular data enforcing mathematical interpretability via Kernel Regression.
-7. **RiskFM**: Foundational frameworks for combatting financial fraud through joint spatial-temporal representation learning.
-
----
-
-## ⚖️ Governance & License
-This project complies with strict data protection guidelines. Raw transaction data must never be committed to Git. Please review `.gitignore` before caching training runs or dataset files.
+## ⚖️ Avisos de Segurança de Dados
+Este repositório possui regras estritas em `.gitignore`. **Nunca faça commit de dados reais (`.csv`, `.parquet`) na pasta `data/`**. Utilize o `synthetic_generator.py` para debugar pipelines em infraestrutura externa segura.

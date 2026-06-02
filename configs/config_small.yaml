@@ -1,0 +1,61 @@
+# =============================================================================
+# SMALL CONFIGURATION (CPU / FAST TESTING)
+# =============================================================================
+# Usa um modelo minúsculo e poucos dados.
+# Projetado para rodar em CPU local em 1-2 minutos para fins de teste
+# (sanity check do código).
+# =============================================================================
+_config_name: "small"
+
+# -----------------------------------------------------------------------------
+# Data & Generation
+# -----------------------------------------------------------------------------
+data_path: "data/synthetic_small.parquet"
+num_users: 200               # Muito poucos usuários, gera rápido
+min_transactions: 10
+max_transactions: 50
+fraud_rate: 0.05             # Taxa mais alta para garantir que apareça fraude no mini-batch
+batch_size: 16               # Batch pequeno = pouca RAM
+max_seq_len: 64
+num_workers: 0               # 0 evita overhead de multiprocessing no Windows
+use_cudf: false
+
+# -----------------------------------------------------------------------------
+# Model Architecture (MMTT + DCNv2)
+# -----------------------------------------------------------------------------
+vocab_size: 20
+hidden_size: 64              # Modelo muito raso e pequeno
+num_layers: 2
+num_heads: 2
+dropout: 0.1
+tabular_feature_size: 3
+dcn_layers: 2
+use_virtual_tokens: true
+num_virtual_tokens: 1
+pooling: "mean"
+
+# -----------------------------------------------------------------------------
+# Phase 1: Pre-training (LimiX)
+# -----------------------------------------------------------------------------
+pretrain_epochs: 3           # Apenas para ver se as loss caem sem erro
+pretrain_lr: 1e-3
+ssl_masking_prob: 0.15
+
+# -----------------------------------------------------------------------------
+# Phase 2: Fine-Tuning (Fraud Classification)
+# -----------------------------------------------------------------------------
+finetune_epochs: 5
+finetune_lr: 1e-3
+pos_weight: 5.0
+metric_threshold: 0.5
+
+# -----------------------------------------------------------------------------
+# Optimizers & Scheduler
+# -----------------------------------------------------------------------------
+weight_decay: 0.01
+warmup_steps: 20
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42

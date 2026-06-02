@@ -1,37 +1,60 @@
-defaults:
-  - _self_
+# =============================================================================
+# DEFAULT CONFIGURATION (PRODUCTION / LARGE GPU)
+# =============================================================================
+# Usa um modelo de tamanho razoável e muitas épocas.
+# Ideal para um servidor GPU ou cloud.
+# =============================================================================
+_config_name: "default"
 
-data:
-  batch_size: 1024
-  num_workers: 8
-  max_seq_len: 256
-  use_cudf: true
+# -----------------------------------------------------------------------------
+# Data & Generation
+# -----------------------------------------------------------------------------
+data_path: "data/synthetic_transactions.parquet"
+num_users: 2500              # Mais usuários = melhor pré-treino
+min_transactions: 30
+max_transactions: 300
+fraud_rate: 0.015            # Fraude é rara no mundo real (1.5%)
+batch_size: 128
+max_seq_len: 256
+num_workers: 4               # Processos paralelos de I/O
+use_cudf: false
 
-model:
-  hidden_size: 768
-  num_heads: 12
-  num_layers: 12
-  dropout: 0.1
-  fusion_type: "dcnv2"
-  cross_layers: 3
+# -----------------------------------------------------------------------------
+# Model Architecture (MMTT + DCNv2)
+# -----------------------------------------------------------------------------
+vocab_size: 20               # Será sobrescrito automaticamente pelo data_module
+hidden_size: 256             # Dimensão do embedding do Transformer
+num_layers: 6                # Profundidade do Transformer
+num_heads: 8                 # Cabeças de atenção (hidden_size deve ser divisível por num_heads)
+dropout: 0.1
+tabular_feature_size: 3      # Bureau score, age, income
+dcn_layers: 4                # Cross network depth (grau polinomial = 5)
+use_virtual_tokens: true
+num_virtual_tokens: 2
+pooling: "mean"
 
-training:
-  max_epochs: 100
-  learning_rate: 1e-4
-  weight_decay: 0.01
-  # SSL Masking configuration based on LimiX (Masked Joint-Distribution)
-  ssl_masking_prob: 0.15
+# -----------------------------------------------------------------------------
+# Phase 1: Pre-training (LimiX)
+# -----------------------------------------------------------------------------
+pretrain_epochs: 15
+pretrain_lr: 5e-4            # Taxa de aprendizado base (AdamW)
+ssl_masking_prob: 0.20       # 20% de tokens mascarados no joint-distribution
 
-evaluation:
-  metric_threshold: 0.5
-  enable_strategic_shift: false
-  
-benchmarks:
-  # Datasets used for formal testing
-  datasets:
-    - "V4FinBench"         # Corporate bankruptcy forecasting (extreme imbalance)
-    - "OpenML-CC18"        # Zero-shot general tabular classification
-    - "TabArena"           # Few-shot general tabular tasks
-    - "TALENT-REG"         # Inference quality and tabular interpretability
-    - "Adult"              # Adversarial evasion / strategic manipulation simulation
-    - "BankMarketing"      # Adversarial evasion
+# -----------------------------------------------------------------------------
+# Phase 2: Fine-Tuning (Fraud Classification)
+# -----------------------------------------------------------------------------
+finetune_epochs: 20
+finetune_lr: 3e-4            # Menor que o pretrain para não esquecer os pesos base
+pos_weight: 15.0             # Multiplicador da loss para a classe minoritária (Fraude)
+metric_threshold: 0.4        # Threshold de F1 (0.4 foca mais em Recall do que 0.5)
+
+# -----------------------------------------------------------------------------
+# Optimizers & Scheduler
+# -----------------------------------------------------------------------------
+weight_decay: 0.01           # Regularização L2 acoplada no AdamW
+warmup_steps: 200            # Passos lineares antes do cosseno decair
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
