@@ -1,108 +1,120 @@
 # Large Data Models (LDMs) Research Lab
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
-![PyTorch Lightning](https://img.shields.io/badge/pytorch--lightning-2.1+-orange.svg)
-![Status](https://img.shields.io/badge/status-active_development-success.svg)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![PyTorch 2.1+](https://img.shields.io/badge/pytorch-2.1+-red.svg)](https://pytorch.org/)
+[![PyTorch Lightning 2.1+](https://img.shields.io/badge/pytorch--lightning-2.1+-orange.svg)](https://lightning.ai/)
+[![Status](https://img.shields.io/badge/status-active_development-success.svg)](#)
 
-Bem-vindo ao LDM Research Lab! Este repositório é uma plataforma corporativa e educacional projetada para pré-treinar (Self-Supervised) e especializar (Fine-Tuning) **Foundation Models para dados estruturados e transacionais**. 
+Welcome to the **LDM Research Lab**! This repository is a production-grade corporate and research platform designed to pre-train (Self-Supervised Learning) and specialize (Fine-Tuning) **Foundation Models for structured and transactional sequence data**.
 
-Enquanto LLMs (como GPT ou Claude) dominam a linguagem natural, os **LDMs (Large Data Models)** compreendem nativamente sequências numéricas, tabulares e temporais sem destruir a precisão matemática.
-
-> 🇧🇷 **Documentação em Português Disponível!** 
-> Para a equipe técnica brasileira, disponibilizamos guias didáticos completos sobre a teoria e a prática na pasta `/docs`.
+Unlike LLMs (which are tailored for natural language), **Large Data Models (LDMs)** natively comprehend numerical, tabular, and temporal sequences without sacrificing mathematical precision or wasting memory on text representation.
 
 ---
 
-## 🚀 Quick Start (Rodando seu primeiro modelo)
+## 🚀 Quick Start (Running the Pipeline)
 
-Se você não possui dados reais em mãos, não se preocupe. O repositório vem com um gerador de dados sintéticos completo.
+The repository includes a synthetic data generator to simulate realistic transaction histories.
 
-### 1. Instalação
-O projeto pode ser instalado localmente ou via Docker (recomendado para GPU).
+### 1. Installation
 
-**Local:**
+You can install the package locally or build it via Docker:
+
+**Local Setup:**
 ```bash
-# Clone o repositório
-git clone <url-do-repo>
+# Clone the repository
+git clone <url-to-repo>
 cd Large-Data-Models-LDMs-
 
-# Instale em modo editável (requirements já inclusos no setup)
-pip install -e ".[viz,tracking]"
+# Install in editable mode with development extras
+pip install -e ".[viz,tracking,peft]"
 ```
 
-**Docker:**
+**Docker Setup:**
 ```bash
 docker build -t ldm-research -f docker/Dockerfile .
 docker run --gpus all -it ldm-research
 ```
 
-### 2. Rodando o Pipeline Completo
-O comando abaixo irá:
-1. Gerar milhares de transações financeiras realistas (fraudáveis).
-2. Fazer o **pré-treinamento** não-supervisionado usando o objetivo LimiX.
-3. Fazer o **fine-tuning** para classificação binária (Fraude) usando DCNv2.
-4. Salvar os resultados, checkpoints e relatórios em `results/`.
+### 2. Running the End-to-End Pipeline
+
+This runs the complete pipeline:
+1. **Generate**: Creates realistic, highly imbalanced synthetic transactional data.
+2. **Pre-train**: Performs self-supervised joint-distribution pre-training (using the LimiX masked objective).
+3. **Fine-tune**: Merges sequential transaction embeddings with static tabular features using a Deep & Cross Network v2 (DCNv2) to perform fraud classification.
+4. **Evaluate**: Computes classification metrics (AUC, F1, Precision, Recall) under clean and adversarial conditions.
 
 ```bash
-# Execução rápida (CPU ou para testes de sanidade - 2 minutos)
+# Run quick verification on CPU (approx. 1-2 minutes)
 python src/main.py --config small
 
-# Execução completa corporativa (GPU recomendada)
+# Run full production training (requires GPU)
 python src/main.py --config default
 ```
 
-Após o fim da execução, abra o arquivo `results/metrics_report.md` para ver o AUC, F1-Score e outras métricas.
+All checkpoints, configurations, and evaluation metrics are saved to the `results/` directory.
 
 ---
 
-## 🧠 Arquitetura e Conceitos Principais
+## 🧠 Architecture and Data Flow
 
-A arquitetura do LDM baseia-se no estado-da-arte (TransactionGPT, PRAGMA, LimiX):
+The core architecture of the LDM combines sequential event tokenization with explicit feature crossing.
 
 ```mermaid
 graph TD
-    A[Transações MMTT] -->|Key-Value-Time Tokenization| B(MMTT Transformer Encoder)
-    B -->|Masked Modeling| C{Fase 1: Pré-treino SSL}
-    B -->|Token Pooling| D[Virtual Token / CLS Embedding]
-    D --> E[Fusão DCNv2]
-    F[Features do Bureau/Tabular] --> E
-    E -->|BCEWithLogits| G{Fase 2: Fine-tuning}
-    G --> H((Detecção de Fraude))
+    subgraph Input mod [1. Multi-Modal Tokenization]
+        A1[MCC Codes] -->|Discrete Vocab Map| B1[Key Embedding]
+        A2[Txn Amounts] -->|Continuous Scale| B2[Value Projection]
+        A3[Time Deltas] -->|Temporal Bins| B3[Time Embedding]
+    end
+
+    subgraph Fusion [2. Additive Fusion & Context]
+        B1 & B2 & B3 -->|Element-wise Sum| C[Fused Embedding]
+        V[Learnable Virtual Tokens] -->|Prepend| D[Conditioned Input Sequence]
+        C --> D
+    end
+
+    subgraph Encoder [3. Masked Attention & Transformer]
+        D -->|Attention Blocked on Padding| E[Transformer Encoder Layers]
+        M[Key Padding Mask] -->|Enforces Boundary Guards| E
+    end
+
+    subgraph Head [4. Parallel Fusion Head]
+        E -->|Masked Mean/Max Pooling| F[Pooled Sequence Representation]
+        T[Static Tabular Features] -->|Z-Score Normalized| G[Bureau, Income, Age]
+        F & G -->|Concat| H[Concatenated State]
+        H -->|Explicit Poly crosses| I[Cross Network V2]
+        H -->|Implicit non-linear mappings| J[Deep Net MLP]
+        I & J -->|Concat| K[Final Projection Layer]
+        K --> L[Binary Classification Logits]
+    end
+
+    classDef default fill:#1a1c1e,stroke:#3b82f6,stroke-width:2px,color:#fff;
 ```
 
-1. **Tokenização KVT (Key-Value-Time)**: Transações não são texto. KVT separa a Categoria (embedding discreto), Valor (normalizado escalar) e Tempo (delta quantizado).
-2. **Pré-treinamento Masked Joint-Distribution (LimiX)**: Esconde partes heterogêneas dos dados. O modelo aprende a estrutura comportamental preenchendo as lacunas, sem precisar de rótulos humanos.
-3. **Fusão Polinomial (DCNv2)**: Para fine-tuning, fundimos as representações profundas do Transformer com *features* estáticas antigas (ex: Score do Serasa) usando interações matemáticas explícitas.
+### Key Architectural Layers:
+1. **Key-Value-Time (KVT) Tokenization**: Instead of flattening transactions into string representations, we isolate Categories (MCC), scalar values (z-score normalized amounts), and temporal rhythms (delta bins) to preserve precision.
+2. **Learnable Virtual Tokens**: Acts as continuous prompts prepended to the sequence, conditioning the multi-head attention weights with global contexts (analogous to the `[CLS]` token).
+3. **Attention Padding Guardrails**: A boolean `key_padding_mask` filters out padded sequences from both multi-head attention calculations and sequence pooling (Mean/Max), preventing information leakage or dilution.
+4. **Parallel Deep & Cross Network (DCNv2)**: Fuses contextual sequential transaction features with z-score normalized static tabular features (e.g., credit score) using explicit polynomial crossing.
 
 ---
 
-## 📚 Trilha de Aprendizado (Para a Equipe)
+## 🛡️ Production & Reliability Refactoring Notes
 
-Preparamos uma documentação passo-a-passo para garantir o nivelamento técnico de todos os envolvidos na iniciativa LDM.
+The repository has been updated with strict mathematical and architectural constraints to make it production-ready:
 
-Recomendamos a leitura na seguinte ordem:
-
-1. 📖 [Fundamentos: O que são LDMs e por que não usar LLMs?](docs/01_fundamentos_ldm.md)
-2. 🧱 [Arquitetura MMTT: Tokenização Key-Value-Time](docs/02_arquitetura_mmtt.md)
-3. 🕵️‍♂️ [Pré-treinamento: Como o modelo aprende sozinho (LimiX)](docs/03_pretraining_limix.md)
-4. ⚙️ [Fine-tuning: Unindo Transformers e Features Clássicas (DCNv2)](docs/04_finetuning_dcnv2.md)
-5. 🛡️ [Avaliação e Robustez: Defesa contra atacantes e AUC](docs/05_avaliacao_robustez.md)
-6. 🔬 [Referências e Literatura Acadêmica Oficial](docs/references.md)
+*   **Attention Padding Bug Fix**: In previous versions, sequence collation padded shorter runs with `0`. Since MCC token `0` was mapped to a valid category (`grocery_stores`), the model attended to padding as real purchases. We introduced a `key_padding_mask` to completely isolate padding tokens in the native PyTorch `TransformerEncoder` attention layers.
+*   **Masked Pooling Math**: Standard sequence pooling was previously taking a simple average over the padded length, which severely diluted representations for users with short transaction histories. We refactored `mean` and `max` pooling to compute mathematically correct statistics exclusively over active, non-padded token positions.
+*   **Static Feature Normalization**: Raw tabular features like `income` (~$100,000) and `bureau_score` (~700) were previously passed directly into DCNv2. Due to the explicit multiplicative crossing, this caused immediate logit explosions (numerical values in the billions). We introduced a standard column-wise z-score normalization step for all static tabular features, stabilizing the loss function.
+*   **Robust Test Suite**: Added a comprehensive suite under `tests/test_ldm.py` to assert correct padding isolation, test low-rank vs full-rank DCNv2 crosses, and verify end-to-end lightning pre-training and fine-tuning steps.
 
 ---
 
-## 📂 Estrutura do Repositório (Executável)
+## 📂 Repository Structure
 
-O código foi reestruturado de *conceitual* para um **Módulo Lightning End-to-End**.
-
-*   `src/main.py`: Entrypoint único que orquestra todo o pipeline (Configurações via argparse).
-*   `src/data/`: `LDMDataModule`, Tokenização MMTT, e gerador de dados sintéticos hiper-realista.
-*   `src/models/`: Backbone do Transformer, Virtual Tokens, DCNv2, e o `LargeDataModel` principal.
-*   `src/training/`: Objetivos SSL (NTP, LimiX) e `LightningModules` com suporte a mixed-precision.
-*   `src/evaluation/`: Métricas resistentes a desbalanceamento (AUC, Flexible F1) e testes de stress Adversarial (FGSM).
-*   `configs/`: Hyperparâmetros organizados em presets (`default` e `small`).
-
----
-
-## ⚖️ Avisos de Segurança de Dados
-Este repositório possui regras estritas em `.gitignore`. **Nunca faça commit de dados reais (`.csv`, `.parquet`) na pasta `data/`**. Utilize o `synthetic_generator.py` para debugar pipelines em infraestrutura externa segura.
+*   `src/main.py`: Entrypoint orchestrating data creation, pre-training, fine-tuning, and benchmarks.
+*   `src/data/`: `LDMDataModule` for data loading, KVT tokenization, and synthetic generation.
+*   `src/models/`: Neural components containing the Transformer backbone, virtual token prompts, and DCNv2 head.
+*   `src/training/`: Self-supervised pre-training objectives (LimiX) and fine-tuning configurations.
+*   `src/evaluation/`: Evaluation metrics (AUC, F1) and out-of-distribution adversarial stress testing (FGSM).
+*   `tests/`: Standardized unit tests verifying robustness and accuracy.

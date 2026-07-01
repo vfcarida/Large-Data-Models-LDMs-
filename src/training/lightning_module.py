@@ -99,6 +99,7 @@ class LDMPreTrainingModule(pl.LightningModule):
             batch["packed_keys"],
             batch["packed_values"],
             batch["packed_times"],
+            key_padding_mask=batch.get("key_padding_mask"),
             is_causal=False,  # Bidirectional for masked modeling
         )
 
@@ -116,11 +117,16 @@ class LDMPreTrainingModule(pl.LightningModule):
         keys = batch["packed_keys"]
         values = batch["packed_values"]
         times = batch["packed_times"]
+        key_padding_mask = batch.get("key_padding_mask")
 
         # Step 1: Get original (unmasked) embeddings as targets
         with torch.no_grad():
             original_embeddings = self.model.encode(
-                keys, values, times, is_causal=False
+                keys,
+                values,
+                times,
+                key_padding_mask=key_padding_mask,
+                is_causal=False
             )
 
         # Step 2: Generate mask based on INPUT sequence length
@@ -145,7 +151,11 @@ class LDMPreTrainingModule(pl.LightningModule):
 
         # Step 4: Encode the masked input
         reconstructed = self.model.encode(
-            keys, noisy_values, times, is_causal=False
+            keys,
+            noisy_values,
+            times,
+            key_padding_mask=key_padding_mask,
+            is_causal=False
         )
 
         # The mask for loss computation needs to match the output embedding shape!
@@ -161,6 +171,15 @@ class LDMPreTrainingModule(pl.LightningModule):
         else:
             loss_mask = input_mask
 
+        # Exclude padded positions from reconstruction loss
+        if key_padding_mask is not None:
+            if num_virtual > 0:
+                v_padding = torch.zeros((B, num_virtual), dtype=torch.bool, device=keys.device)
+                full_padding_mask = torch.cat([v_padding, key_padding_mask], dim=1)
+            else:
+                full_padding_mask = key_padding_mask
+            loss_mask = loss_mask & (~full_padding_mask)
+
         # Step 5: Compute loss only at masked positions
         loss = self.masked_loss(reconstructed, original_embeddings, loss_mask)
 
@@ -173,8 +192,15 @@ class LDMPreTrainingModule(pl.LightningModule):
         keys = batch["packed_keys"]
         values = batch["packed_values"]
         times = batch["packed_times"]
+        key_padding_mask = batch.get("key_padding_mask")
 
-        original = self.model.encode(keys, values, times, is_causal=False)
+        original = self.model.encode(
+            keys,
+            values,
+            times,
+            key_padding_mask=key_padding_mask,
+            is_causal=False
+        )
         
         if keys.dim() == 2:
             B, S = keys.shape
@@ -192,7 +218,13 @@ class LDMPreTrainingModule(pl.LightningModule):
         else:
             noisy_values[input_mask] = 0.0
 
-        reconstructed = self.model.encode(keys, noisy_values, times, is_causal=False)
+        reconstructed = self.model.encode(
+            keys,
+            noisy_values,
+            times,
+            key_padding_mask=key_padding_mask,
+            is_causal=False
+        )
         
         num_virtual = reconstructed.shape[1] - S
         if num_virtual > 0:
@@ -205,6 +237,15 @@ class LDMPreTrainingModule(pl.LightningModule):
         else:
             loss_mask = input_mask
             
+        # Exclude padded positions from reconstruction loss
+        if key_padding_mask is not None:
+            if num_virtual > 0:
+                v_padding = torch.zeros((B, num_virtual), dtype=torch.bool, device=keys.device)
+                full_padding_mask = torch.cat([v_padding, key_padding_mask], dim=1)
+            else:
+                full_padding_mask = key_padding_mask
+            loss_mask = loss_mask & (~full_padding_mask)
+
         loss = self.masked_loss(reconstructed, original, loss_mask)
 
         self.log("pretrain/val_loss", loss, on_epoch=True, prog_bar=True)
@@ -307,6 +348,7 @@ class LDMFineTuningModule(pl.LightningModule):
             batch["packed_values"],
             batch["packed_times"],
             tabular_features=batch.get("tabular"),
+            key_padding_mask=batch.get("key_padding_mask"),
         )
 
     def training_step(self, batch, batch_idx):

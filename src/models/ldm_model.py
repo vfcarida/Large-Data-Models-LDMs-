@@ -150,6 +150,7 @@ class LargeDataModel(nn.Module):
         packed_keys: torch.Tensor,
         packed_values: torch.Tensor,
         packed_times: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -162,17 +163,25 @@ class LargeDataModel(nn.Module):
             packed_keys: Categorical token indices.
             packed_values: Continuous values.
             packed_times: Temporal delta indices.
+            key_padding_mask: Optional sequence padding mask.
 
         Returns:
             Full sequence embeddings [batch, seq_len, hidden_size]
         """
-        return self.encoder(packed_keys, packed_values, packed_times, **kwargs)
+        return self.encoder(
+            packed_keys,
+            packed_values,
+            packed_times,
+            key_padding_mask=key_padding_mask,
+            **kwargs
+        )
 
     def get_pooled_embedding(
         self,
         packed_keys: torch.Tensor,
         packed_values: torch.Tensor,
         packed_times: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -184,7 +193,11 @@ class LargeDataModel(nn.Module):
             Pooled embeddings [batch, hidden_size]
         """
         return self.encoder.get_pooled_output(
-            packed_keys, packed_values, packed_times, **kwargs
+            packed_keys,
+            packed_values,
+            packed_times,
+            key_padding_mask=key_padding_mask,
+            **kwargs
         )
 
     def forward(
@@ -193,6 +206,7 @@ class LargeDataModel(nn.Module):
         packed_values: torch.Tensor,
         packed_times: torch.Tensor,
         tabular_features: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -209,13 +223,18 @@ class LargeDataModel(nn.Module):
             packed_values: Continuous values.
             packed_times: Temporal delta indices.
             tabular_features: Static tabular features [batch, tabular_dim].
+            key_padding_mask: Optional sequence padding mask.
 
         Returns:
             Binary logits [batch, 1] (pre-sigmoid).
         """
         # Step 1-2: Encode and pool
         pooled = self.get_pooled_embedding(
-            packed_keys, packed_values, packed_times, **kwargs
+            packed_keys,
+            packed_values,
+            packed_times,
+            key_padding_mask=key_padding_mask,
+            **kwargs
         )
 
         # Step 3-4: Fuse with tabular features

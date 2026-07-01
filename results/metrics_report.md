@@ -1,6 +1,6 @@
 # LDM Training Results Report
 
-**Generated**: 2026-06-01 23:16:12
+**Generated**: 2026-07-01 14:58:35
 **Config**: small
 
 ---
@@ -29,16 +29,16 @@
 
 | Phase | Epochs | Learning Rate | Duration |
 |-------|--------|--------------|----------|
-| Pre-training (LimiX) | 3 | 0.001 | 3.8s |
-| Fine-tuning (Classification) | 5 | 0.001 | 6.0s |
+| Pre-training (LimiX) | 3 | 0.001 | 58.8s |
+| Fine-tuning (Classification) | 5 | 0.001 | 26.7s |
 
 ## Test Results (Final Evaluation)
 
 | Metric | Value |
 |--------|-------|
-| test/loss | 305338417152.0000 |
-| test/auc | 0.5000 |
-| test/f1 | 0.0000 |
+| test/loss | 1.0101 |
+| test/auc | 0.4034 |
+| test/f1 | 0.8462 |
 
 ---
 

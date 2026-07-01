@@ -254,6 +254,7 @@ class MMTTTransformerEncoder(nn.Module):
         cu_seqlens: Optional[torch.Tensor] = None,
         max_seqlen: Optional[int] = None,
         is_causal: bool = False,
+        key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the MMTT Transformer Encoder.
@@ -275,6 +276,7 @@ class MMTTTransformerEncoder(nn.Module):
             max_seqlen: Maximum sequence length in this batch
             is_causal: If True → unidirectional mask (for NTP)
                        If False → bidirectional (for masked modeling)
+            key_padding_mask: Boolean mask [batch, seq] where True denotes padded positions
 
         Returns:
             Contextual embeddings. Shape depends on input:
@@ -326,8 +328,20 @@ class MMTTTransformerEncoder(nn.Module):
                 S, device=x.device, dtype=x.dtype
             )
 
+        # Prepend False values to the key_padding_mask to account for virtual tokens
+        prepared_padding_mask = key_padding_mask
+        if self.use_virtual_tokens and key_padding_mask is not None:
+            v_mask = torch.zeros(B, self.num_virtual_tokens, dtype=torch.bool, device=key_padding_mask.device)
+            # Concatenate virtual token mask (False) and actual token mask
+            prepared_padding_mask = torch.cat([v_mask, key_padding_mask], dim=1)
+
         # Step 6-7: Transformer forward + final norm
-        out = self.transformer(x, mask=mask, is_causal=is_causal)
+        out = self.transformer(
+            x,
+            mask=mask,
+            src_key_padding_mask=prepared_padding_mask,
+            is_causal=is_causal
+        )
         out = self.final_norm(out)
 
         return out
@@ -337,6 +351,7 @@ class MMTTTransformerEncoder(nn.Module):
         packed_keys: torch.Tensor,
         packed_values: torch.Tensor,
         packed_times: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -347,24 +362,56 @@ class MMTTTransformerEncoder(nn.Module):
 
         Pooling strategies:
         - "cls": First token's embedding (virtual token acts as [CLS])
-        - "mean": Average of all token embeddings (most robust)
-        - "max": Maximum across the sequence dimension
+        - "mean": Average of all token embeddings (most robust, ignoring padding)
+        - "max": Maximum across the sequence dimension (ignoring padding)
 
         Returns:
             Tensor of shape [batch, hidden_size]
         """
-        # Full forward pass
-        out = self.forward(packed_keys, packed_values, packed_times, **kwargs)
+        # Full forward pass, passing key_padding_mask explicitly
+        out = self.forward(
+            packed_keys,
+            packed_values,
+            packed_times,
+            key_padding_mask=key_padding_mask,
+            **kwargs
+        )
 
         # Apply pooling to reduce sequence dimension
         if self.pooling == "cls":
             # First token is the virtual/CLS token
             return out[:, 0, :]
         elif self.pooling == "mean":
-            # Average over the sequence dimension
-            return out.mean(dim=1)
+            # Average over the sequence dimension, ignoring padded elements
+            if key_padding_mask is not None:
+                if self.use_virtual_tokens:
+                    B = out.shape[0]
+                    v_mask = torch.zeros(B, self.num_virtual_tokens, dtype=torch.bool, device=key_padding_mask.device)
+                    full_mask = torch.cat([v_mask, key_padding_mask], dim=1)
+                else:
+                    full_mask = key_padding_mask
+                
+                # full_mask shape: [B, S_new]
+                valid_mask = (~full_mask).unsqueeze(-1).float()  # [B, S_new, 1]
+                sum_embeddings = (out * valid_mask).sum(dim=1)
+                num_valid = valid_mask.sum(dim=1).clamp(min=1)
+                return sum_embeddings / num_valid
+            else:
+                return out.mean(dim=1)
         elif self.pooling == "max":
-            # Max-pool over the sequence dimension
-            return out.max(dim=1).values
+            # Max-pool over the sequence dimension, ignoring padded elements
+            if key_padding_mask is not None:
+                if self.use_virtual_tokens:
+                    B = out.shape[0]
+                    v_mask = torch.zeros(B, self.num_virtual_tokens, dtype=torch.bool, device=key_padding_mask.device)
+                    full_mask = torch.cat([v_mask, key_padding_mask], dim=1)
+                else:
+                    full_mask = key_padding_mask
+                
+                valid_mask = (~full_mask).unsqueeze(-1)  # [B, S_new, 1]
+                masked_out = out.masked_fill(~valid_mask, -1e9)
+                return masked_out.max(dim=1).values
+            else:
+                return out.max(dim=1).values
         else:
             raise ValueError(f"Unknown pooling strategy: {self.pooling}")
