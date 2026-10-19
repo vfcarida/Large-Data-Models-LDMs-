@@ -44,6 +44,11 @@ from src.evaluation.fairness import (
     FairnessGovernanceAuditor,
     EqualizedOddsThresholdOptimizer,
 )
+from src.evaluation.audit_ledger import (
+    AuditRecord,
+    TamperEvidentAuditLedger,
+    StatisticalLogitWatermarker,
+)
 from src.evaluation.benchmarks import BenchmarkSuite
 
 __all__ = [
@@ -73,5 +78,8 @@ __all__ = [
     "FairnessReport",
     "FairnessGovernanceAuditor",
     "EqualizedOddsThresholdOptimizer",
+    "AuditRecord",
+    "TamperEvidentAuditLedger",
+    "StatisticalLogitWatermarker",
     "BenchmarkSuite",
 ]

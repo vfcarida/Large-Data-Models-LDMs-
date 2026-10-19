@@ -1035,4 +1035,205 @@ def test_fairness_governance_auditor_and_equalized_odds_optimizer():
     assert mitigated_report.demographic_parity_diff < raw_report.demographic_parity_diff
 
 
+def test_conditional_flow_matching_loss_and_heun_synthesis():
+    """Verify ConditionalTrajectoryFlowMatcher OT-CFM training loss and Euler/Heun ODE synthesis."""
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=4,
+    )
+    keys = torch.randint(1, 12, (6, 8))
+    values = torch.randn(6, 8)
+    times = torch.randint(0, 10, (6, 8))
+    tab = torch.randn(6, 4)
+    labels = torch.tensor([0, 1, 0, 1, 0, 1], dtype=torch.long)
 
+    flow_out = model.compute_trajectory_flow_loss(
+        packed_keys=keys,
+        packed_values=values,
+        packed_times=times,
+        tabular_features=tab,
+        labels=labels,
+    )
+    assert flow_out["loss"].requires_grad
+    assert float(flow_out["loss"].item()) > 0.0
+    flow_out["loss"].backward()
+
+    syn_fraud = model.synthesize_counterfactual_trajectories(
+        num_samples=5, target_class=1, num_steps=8, solver="heun", seed=42
+    )
+    assert syn_fraud["joint_latent"].shape == (5, 20)
+    assert syn_fraud["sequence_embedding"].shape == (5, 16)
+    assert syn_fraud["tabular_features"].shape == (5, 4)
+    assert syn_fraud["fraud_probs"].shape == (5, 1)
+    assert torch.all((syn_fraud["fraud_probs"] >= 0.0) & (syn_fraud["fraud_probs"] <= 1.0))
+
+    # Deterministic synthesis with same seed
+    syn_fraud_repeat = model.synthesize_counterfactual_trajectories(
+        num_samples=5, target_class=1, num_steps=8, solver="heun", seed=42
+    )
+    assert torch.allclose(syn_fraud["joint_latent"], syn_fraud_repeat["joint_latent"], atol=1e-6)
+
+
+def test_continual_ewc_and_dark_experience_lifelong_adaptation():
+    """Verify ContinualLDMAdapter consolidates Fisher importance and adapts without catastrophic forgetting."""
+    from src.training.continual import ContinualLDMAdapter
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        tabular_feature_size=3,
+    )
+
+    gen = SyntheticTransactionGenerator(
+        num_users=12, min_transactions=5, max_transactions=8, fraud_rate=0.25, seed=42
+    )
+    ds = FinancialEventDataset(gen.generate(), max_seq_len=8)
+    loader = DataLoader(ds, batch_size=6, collate_fn=dynamic_sequence_packing_collate_fn)
+    batches = list(loader)
+    regime_1_batch, regime_2_batch = batches[0], batches[1]
+
+    adapter = ContinualLDMAdapter(model, ewc_lambda=20.0, der_alpha=0.5)
+    adapter.consolidate_regime(regime_1_batch)
+    assert adapter.num_consolidated_regimes == 1
+    assert len(adapter.fisher_omega) > 0
+
+    report = adapter.adapt_to_new_regime(
+        new_regime_batch=regime_2_batch,
+        historical_probe_batch=regime_1_batch,
+        num_steps=4,
+        lr=5e-3,
+    )
+    assert report.num_consolidated_regimes == 1
+    assert report.new_regime_loss_after < report.new_regime_loss_before
+    assert report.ewc_penalty >= 0.0
+    assert report.parameter_l2_drift > 0.0
+
+
+def test_peft_dora_adapters_zero_latency_merge_and_nf4_quantization():
+    """Verify LoRALinear (DoRA) exact initialization, zero-latency weight merging, and 4-bit NF4 compression."""
+    from src.serving.peft_and_nf4 import (
+        inject_lora_adapters,
+        merge_lora_adapters,
+        quantize_ldm_nf4,
+    )
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=16,
+        hidden_size=32,
+        num_layers=2,
+        num_heads=4,
+        dropout=0.0,
+        tabular_feature_size=4,
+    )
+    model.eval()
+
+    keys = torch.randint(1, 16, (4, 8))
+    values = torch.randn(4, 8)
+    times = torch.randint(0, 10, (4, 8))
+    tab = torch.randn(4, 4)
+
+    with torch.no_grad():
+        base_logits = model(keys, values, times, tabular_features=tab)
+
+    # Test 4-bit NormalFloat (NF4) quantization
+    nf4_model, nf4_report = quantize_ldm_nf4(model, block_size=32)
+    assert nf4_report["compression_ratio"] > 1.10
+    assert nf4_report["linear_compression_ratio"] > 4.0
+    with torch.no_grad():
+        nf4_logits = nf4_model(keys, values, times, tabular_features=tab)
+    assert nf4_logits.shape == base_logits.shape
+    assert torch.isfinite(nf4_logits).all()
+
+    # Test DoRA injection: at initialization (B=0), output must match base_logits identically
+    peft_summary = inject_lora_adapters(model, rank=4, alpha=8.0, use_dora=True)
+    assert peft_summary["trainable_pct"] < 50.0
+    model.eval()
+    with torch.no_grad():
+        dora_init_logits = model(keys, values, times, tabular_features=tab)
+    assert torch.allclose(base_logits, dora_init_logits, atol=1e-5)
+
+    # Take one gradient step on DoRA parameters, then merge and verify zero-diff parity
+    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-2)
+    loss = model(keys, values, times, tabular_features=tab).pow(2).mean()
+    loss.backward()
+    opt.step()
+
+    with torch.no_grad():
+        pre_merge_logits = model(keys, values, times, tabular_features=tab)
+
+    merged_count = merge_lora_adapters(model)
+    assert merged_count > 0
+    with torch.no_grad():
+        post_merge_logits = model(keys, values, times, tabular_features=tab)
+    assert torch.allclose(pre_merge_logits, post_merge_logits, atol=1e-5)
+
+
+def test_tamper_evident_audit_ledger_and_logit_watermarking():
+    """Verify TamperEvidentAuditLedger HMAC-SHA256 hash chain and StatisticalLogitWatermarker detection."""
+    from src.evaluation.audit_ledger import (
+         AuditRecord,
+        StatisticalLogitWatermarker,
+        TamperEvidentAuditLedger,
+    )
+
+    ledger = TamperEvidentAuditLedger(secret_key="unit-test-secret", model_version="0.7.0")
+    r0 = ledger.record_decision(
+        transaction_id="tx_001",
+        entity_id="usr_10",
+        risk_probability=0.0412,
+        decision="APPROVE",
+        conformal_interval=(0.05, 0.92),
+        adverse_reasons=[],
+    )
+    r1 = ledger.record_decision(
+        transaction_id="tx_002",
+        entity_id="usr_99",
+        risk_probability=0.9640,
+        decision="DECLINE",
+        conformal_interval=(0.05, 0.92),
+        adverse_reasons=["HIGH_VELOCITY_MCC_BURST"],
+    )
+    assert r1.prev_hash == r0.record_hash
+    is_valid, tampered_idx = ledger.verify_chain_integrity()
+    assert is_valid
+    assert tampered_idx is None
+
+    # Simulate retroactive tampering of record 0's risk_probability
+    ledger._records[0] = AuditRecord(
+        sequence_index=r0.sequence_index,
+        transaction_id=r0.transaction_id,
+        entity_id=r0.entity_id,
+        risk_probability=0.0001,  # tampered!
+        decision=r0.decision,
+        conformal_lower=r0.conformal_lower,
+        conformal_upper=r0.conformal_upper,
+        adverse_reasons=r0.adverse_reasons,
+        model_version=r0.model_version,
+        prev_hash=r0.prev_hash,
+        record_hash=r0.record_hash,
+    )
+    is_valid_after, tampered_idx_after = ledger.verify_chain_integrity()
+    assert not is_valid_after
+    assert tampered_idx_after == 0
+
+    # Statistical Logit Watermarking verification
+    watermarker = StatisticalLogitWatermarker(
+        secret_key="watermark-test-key", delta_w=1e-4, z_threshold=3.0
+    )
+    base_logits = torch.linspace(-2.0, 2.0, 64)
+    ctx_ids = torch.arange(1000, 1064)
+
+    wm_logits = watermarker.embed_watermark(base_logits, ctx_ids)
+    det_res = watermarker.detect_watermark(wm_logits, base_logits, ctx_ids)
+    assert det_res["is_watermarked"]
+    assert det_res["z_score"] >= 7.5
+    assert det_res["max_prob_shift"] < 1e-4

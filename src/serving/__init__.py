@@ -18,6 +18,13 @@ from src.serving.quantization_and_cascade import (
     CascadeEarlyExitRouter,
     quantize_ldm_dynamic_int8,
 )
+from src.serving.peft_and_nf4 import (
+    LoRALinear,
+    BlockwiseNF4Linear,
+    inject_lora_adapters,
+    merge_lora_adapters,
+    quantize_ldm_nf4,
+)
 
 __all__ = [
     "LDMInferenceWrapper",
@@ -30,4 +37,9 @@ __all__ = [
     "CascadeBenchmarkReport",
     "CascadeEarlyExitRouter",
     "quantize_ldm_dynamic_int8",
+    "LoRALinear",
+    "BlockwiseNF4Linear",
+    "inject_lora_adapters",
+    "merge_lora_adapters",
+    "quantize_ldm_nf4",
 ]

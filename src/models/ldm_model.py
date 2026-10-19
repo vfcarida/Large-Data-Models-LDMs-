@@ -67,6 +67,7 @@ from src.models.in_context_pfn import InContextPFNHead
 from src.models.multi_task_moe import MultiGateMixtureOfExpertsHead
 from src.models.causal_uplift import CausalDragonNetHead
 from src.models.hypergraph_contagion import TemporalHypergraphContagionModule
+from src.models.flow_matching import ConditionalTrajectoryFlowMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,13 @@ class LargeDataModel(nn.Module):
             embed_dim=hidden_size,
             num_layers=max(1, gnn_layers),
             dropout=dropout,
+        )
+
+        # 10. Horizon Track 7: Conditional Optimal-Transport Flow Matcher (FlowLDM)
+        self.flow_matcher = ConditionalTrajectoryFlowMatcher(
+            latent_dim=hidden_size + tabular_feature_size,
+            hidden_dim=hidden_size * 2,
+            num_classes=2,
         )
 
         total_params = sum(p.numel() for p in self.parameters())
@@ -611,6 +619,84 @@ class LargeDataModel(nn.Module):
         return {
             "hypergraph_embeddings": hg_emb,
             "collusion_ring_score": collusion_score,
+        }
+
+    def compute_trajectory_flow_loss(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        tabular_features: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        detach_backbone: bool = True,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Computes the Optimal-Transport Conditional Flow Matching (`OT-CFM`) loss
+        over joint `[h_enriched || x_tab]` representations.
+        """
+        if detach_backbone:
+            with torch.no_grad():
+                enriched = self.get_enriched_representation(
+                    packed_keys=packed_keys,
+                    packed_values=packed_values,
+                    packed_times=packed_times,
+                    key_padding_mask=key_padding_mask,
+                    update_memory=False,
+                ).detach()
+        else:
+            enriched = self.get_enriched_representation(
+                packed_keys=packed_keys,
+                packed_values=packed_values,
+                packed_times=packed_times,
+                key_padding_mask=key_padding_mask,
+                update_memory=False,
+            )
+
+        if tabular_features is None:
+            tabular_features = torch.zeros(
+                enriched.size(0),
+                self.tabular_feature_size,
+                device=enriched.device,
+                dtype=enriched.dtype,
+            )
+        elif detach_backbone:
+            tabular_features = tabular_features.detach()
+
+        z_target = torch.cat([enriched, tabular_features], dim=-1)
+        return self.flow_matcher.compute_loss(z_target, labels=labels)
+
+    @torch.no_grad()
+    def synthesize_counterfactual_trajectories(
+        self,
+        num_samples: int = 8,
+        target_class: int = 1,
+        num_steps: int = 16,
+        solver: str = "heun",
+        guidance_scale: float = 1.5,
+        seed: Optional[int] = 42,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Synthesizes conditional joint behavioral-tabular representations and
+        evaluates their downstream DCNv2 fraud logits & probabilities.
+        """
+        z_syn = self.flow_matcher.sample(
+            num_samples=num_samples,
+            target_class=target_class,
+            num_steps=num_steps,
+            solver=solver,
+            guidance_scale=guidance_scale,
+            seed=seed,
+        )
+        syn_seq = z_syn[:, : self.hidden_size]
+        syn_tab = z_syn[:, self.hidden_size :]
+        syn_logits = self.fusion_head(syn_seq, syn_tab)
+        return {
+            "joint_latent": z_syn,
+            "sequence_embedding": syn_seq,
+            "tabular_features": syn_tab,
+            "fraud_logits": syn_logits,
+            "fraud_probs": torch.sigmoid(syn_logits),
         }
 
     def freeze_encoder(self) -> None:

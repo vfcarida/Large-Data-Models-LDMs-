@@ -49,6 +49,10 @@ from src.models.hypergraph_contagion import (
     HypergraphConvLayer,
     TemporalHypergraphContagionModule,
 )
+from src.models.flow_matching import (
+    ConditionalTrajectoryFlowMatcher,
+    SinusoidalFlowTimeEmbedding,
+)
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -71,5 +75,7 @@ __all__ = [
     "recommend_optimal_intervention",
     "HypergraphConvLayer",
     "TemporalHypergraphContagionModule",
+    "ConditionalTrajectoryFlowMatcher",
+    "SinusoidalFlowTimeEmbedding",
     "LargeDataModel",
 ]

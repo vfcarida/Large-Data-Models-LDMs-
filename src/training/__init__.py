@@ -27,6 +27,10 @@ from src.training.unlearning import (
     CertifiedLDMUnlearner,
     UnlearningCertificate,
 )
+from src.training.continual import (
+    ContinualLDMAdapter,
+    ContinualAdaptationReport,
+)
 
 __all__ = [
     "SSLBaseLoss",
@@ -41,4 +45,6 @@ __all__ = [
     "FederatedRoundReport",
     "CertifiedLDMUnlearner",
     "UnlearningCertificate",
+    "ContinualLDMAdapter",
+    "ContinualAdaptationReport",
 ]
