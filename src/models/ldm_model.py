@@ -65,6 +65,8 @@ from src.models.retrieval_attention import TabRRetrievalModule
 from src.models.relational_gnn import RelationalEntityGNN
 from src.models.in_context_pfn import InContextPFNHead
 from src.models.multi_task_moe import MultiGateMixtureOfExpertsHead
+from src.models.causal_uplift import CausalDragonNetHead
+from src.models.hypergraph_contagion import TemporalHypergraphContagionModule
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +75,9 @@ class LargeDataModel(nn.Module):
     """
     Complete Large Data Model supporting self-supervised pre-training,
     relational-retrieval-augmented supervised fine-tuning, in-context
-    prior-data fitted inference, and multi-task Mixture-of-Experts (`MMoE`)
-    decisioning.
+    prior-data fitted inference, multi-task Mixture-of-Experts (`MMoE`),
+    Causal Counterfactual Uplift (`DragonNet`), and Temporal Hypergraph
+    Contagion (`HGNN`) decisioning.
 
     Args:
         vocab_size: Number of unique categorical tokens (MCC codes).
@@ -219,6 +222,21 @@ class LargeDataModel(nn.Module):
             input_dim=hidden_size + tabular_feature_size,
             expert_dim=hidden_size,
             num_experts=num_experts,
+            dropout=dropout,
+        )
+
+        # 8. Horizon Track 5: Causal Counterfactual Uplift Head (DragonNet)
+        self.causal_head = CausalDragonNetHead(
+            input_dim=hidden_size + tabular_feature_size,
+            hidden_dim=hidden_size,
+            dropout=dropout,
+        )
+
+        # 9. Horizon Track 6: Temporal Hypergraph Contagion & Collusion Ring Scorer (HGNN)
+        self.hypergraph_contagion = TemporalHypergraphContagionModule(
+            vocab_size=vocab_size,
+            embed_dim=hidden_size,
+            num_layers=max(1, gnn_layers),
             dropout=dropout,
         )
 
@@ -520,6 +538,80 @@ class LargeDataModel(nn.Module):
 
         joint_features = torch.cat([enriched, tabular_features], dim=-1)
         return self.mmoe_head(joint_features)
+
+    def forward_causal_uplift(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        tabular_features: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        detach_backbone: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Executes Causal DragonNet inference returning propensity scores,
+        potential outcomes `(y0_prob, y1_prob)`, and CATE uplift.
+        """
+        if detach_backbone:
+            with torch.no_grad():
+                enriched = self.get_enriched_representation(
+                    packed_keys=packed_keys,
+                    packed_values=packed_values,
+                    packed_times=packed_times,
+                    key_padding_mask=key_padding_mask,
+                    update_memory=False,
+                )
+            enriched = enriched.detach()
+        else:
+            enriched = self.get_enriched_representation(
+                packed_keys=packed_keys,
+                packed_values=packed_values,
+                packed_times=packed_times,
+                key_padding_mask=key_padding_mask,
+                update_memory=False,
+            )
+
+        if tabular_features is None:
+            tabular_features = torch.zeros(
+                enriched.size(0),
+                self.tabular_feature_size,
+                device=enriched.device,
+                dtype=enriched.dtype,
+            )
+        elif detach_backbone:
+            tabular_features = tabular_features.detach()
+
+        joint_features = torch.cat([enriched, tabular_features], dim=-1)
+        return self.causal_head(joint_features)
+
+    def forward_hypergraph_contagion(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Computes Temporal Hypergraph Contagion representations and multi-hop
+        `collusion_ring_score` `[B, 1]` over `(MCC, velocity_tier)` hyperedges.
+        """
+        pooled = self.get_pooled_embedding(
+            packed_keys=packed_keys,
+            packed_values=packed_values,
+            packed_times=packed_times,
+            key_padding_mask=key_padding_mask,
+        )
+        hg_emb, collusion_score = self.hypergraph_contagion(
+            user_embeddings=pooled,
+            event_keys=packed_keys,
+            event_values=packed_values,
+            event_times=packed_times,
+            key_padding_mask=key_padding_mask,
+        )
+        return {
+            "hypergraph_embeddings": hg_emb,
+            "collusion_ring_score": collusion_score,
+        }
 
     def freeze_encoder(self) -> None:
         """Freezes the Transformer encoder parameters during linear/head probing."""

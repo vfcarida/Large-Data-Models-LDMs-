@@ -39,6 +39,11 @@ from src.evaluation.drift_monitor import (
     compute_mmd_rbf,
     compute_wasserstein_1d,
 )
+from src.evaluation.fairness import (
+    FairnessReport,
+    FairnessGovernanceAuditor,
+    EqualizedOddsThresholdOptimizer,
+)
 from src.evaluation.benchmarks import BenchmarkSuite
 
 __all__ = [
@@ -65,5 +70,8 @@ __all__ = [
     "compute_psi",
     "compute_mmd_rbf",
     "compute_wasserstein_1d",
+    "FairnessReport",
+    "FairnessGovernanceAuditor",
+    "EqualizedOddsThresholdOptimizer",
     "BenchmarkSuite",
 ]

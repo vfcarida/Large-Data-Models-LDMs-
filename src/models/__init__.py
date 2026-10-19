@@ -40,6 +40,15 @@ from src.models.multi_task_moe import (
     MultiGateMixtureOfExpertsHead,
     HomoscedasticMultiTaskLoss,
 )
+from src.models.causal_uplift import (
+    CausalDragonNetHead,
+    DragonNetTargetedLoss,
+    recommend_optimal_intervention,
+)
+from src.models.hypergraph_contagion import (
+    HypergraphConvLayer,
+    TemporalHypergraphContagionModule,
+)
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -57,5 +66,10 @@ __all__ = [
     "InContextPFNHead",
     "MultiGateMixtureOfExpertsHead",
     "HomoscedasticMultiTaskLoss",
+    "CausalDragonNetHead",
+    "DragonNetTargetedLoss",
+    "recommend_optimal_intervention",
+    "HypergraphConvLayer",
+    "TemporalHypergraphContagionModule",
     "LargeDataModel",
 ]

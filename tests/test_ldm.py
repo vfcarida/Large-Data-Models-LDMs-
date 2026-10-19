@@ -851,3 +851,188 @@ def test_dynamic_int8_quantization_and_cascade_early_exit_router():
     assert 0.0 <= report.fast_exit_rate <= 1.0
 
 
+def test_causal_dragonnet_uplift_and_policy_optimizer():
+    """Verify CausalDragonNetHead, DragonNetTargetedLoss, and recommend_optimal_intervention."""
+    from src.models.causal_uplift import (
+        DragonNetTargetedLoss,
+        recommend_optimal_intervention,
+    )
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    keys = torch.randint(0, 10, (6, 8), dtype=torch.long)
+    values = torch.randn(6, 8)
+    times = torch.randint(1, 30, (6, 8), dtype=torch.long)
+    tabular = torch.randn(6, 3)
+
+    causal_out = model.forward_causal_uplift(
+        packed_keys=keys,
+        packed_values=values,
+        packed_times=times,
+        tabular_features=tabular,
+    )
+    assert causal_out["propensity_prob"].shape == (6, 1)
+    assert causal_out["y0_prob"].shape == (6, 1)
+    assert causal_out["y1_prob"].shape == (6, 1)
+    assert causal_out["cate"].shape == (6, 1)
+    assert torch.allclose(
+        causal_out["cate"], causal_out["y1_prob"] - causal_out["y0_prob"], atol=1e-6
+    )
+
+    loss_fn = DragonNetTargetedLoss()
+    treatments = torch.tensor([0, 1, 0, 1, 1, 0], dtype=torch.float32)
+    outcomes = torch.tensor([0, 0, 1, 0, 1, 1], dtype=torch.float32)
+    loss_dict = loss_fn(
+        causal_out, treatments, outcomes, model.causal_head.tmle_epsilon
+    )
+    loss_dict["loss"].backward()
+    assert model.causal_head.tmle_epsilon.grad is not None
+
+    policy = recommend_optimal_intervention(causal_out)
+    assert len(policy["action_names"]) == 6
+    assert all(
+        name in ("FRICTIONLESS_APPROVE", "STEP_UP_2FA", "HARD_BLOCK")
+        for name in policy["action_names"]
+    )
+
+
+def test_temporal_hypergraph_contagion_mask_invariance():
+    """Verify TemporalHypergraphContagionModule output shapes and strict padding-mask invariance."""
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    model.eval()
+
+    keys = torch.randint(0, 12, (4, 10), dtype=torch.long)
+    values = torch.randn(4, 10)
+    times = torch.randint(1, 40, (4, 10), dtype=torch.long)
+    mask = torch.zeros(4, 10, dtype=torch.bool)
+    mask[:, 6:] = True
+
+    keys_corrupted = keys.clone()
+    values_corrupted = values.clone()
+    times_corrupted = times.clone()
+    keys_corrupted[:, 6:] = 11
+    values_corrupted[:, 6:] = 500.0
+    times_corrupted[:, 6:] = 1
+
+    with torch.no_grad():
+        res_1 = model.forward_hypergraph_contagion(
+            keys, values, times, key_padding_mask=mask
+        )
+        res_2 = model.forward_hypergraph_contagion(
+            keys_corrupted, values_corrupted, times_corrupted, key_padding_mask=mask
+        )
+        assert res_1["hypergraph_embeddings"].shape == (4, 16)
+        assert res_1["collusion_ring_score"].shape == (4, 1)
+        assert torch.allclose(
+            res_1["hypergraph_embeddings"], res_2["hypergraph_embeddings"], atol=1e-5
+        )
+        assert torch.allclose(
+            res_1["collusion_ring_score"], res_2["collusion_ring_score"], atol=1e-5
+        )
+
+
+def test_certified_machine_unlearning_tabr_and_fisher_scrubbing():
+    """Verify CertifiedLDMUnlearner purges TabR memory slots and issues UnlearningCertificate."""
+    from src.training.unlearning import CertifiedLDMUnlearner
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        tabular_feature_size=3,
+        tabr_memory_size=32,
+        tabr_top_k=4,
+    )
+
+    gen = SyntheticTransactionGenerator(
+        num_users=12, min_transactions=5, max_transactions=8, fraud_rate=0.25, seed=42
+    )
+    ds = FinancialEventDataset(gen.generate(), max_seq_len=8)
+    loader = DataLoader(ds, batch_size=6, collate_fn=dynamic_sequence_packing_collate_fn)
+    batches = list(loader)
+    forget_batch, retain_batch = batches[0], batches[1]
+
+    # Populate TabR memory bank with both cohorts
+    model.train()
+    _ = model(
+        forget_batch["packed_keys"],
+        forget_batch["packed_values"],
+        forget_batch["packed_times"],
+        tabular_features=forget_batch["tabular"],
+        key_padding_mask=forget_batch["key_padding_mask"],
+        labels=forget_batch["labels"],
+        update_memory=True,
+    )
+    _ = model(
+        retain_batch["packed_keys"],
+        retain_batch["packed_values"],
+        retain_batch["packed_times"],
+        tabular_features=retain_batch["tabular"],
+        key_padding_mask=retain_batch["key_padding_mask"],
+        labels=retain_batch["labels"],
+        update_memory=True,
+    )
+    assert int(model.tabr_retrieval.memory_count.item()) == 12
+
+    unlearner = CertifiedLDMUnlearner(model, noise_scale=1e-4)
+    cert = unlearner.unlearn_cohort(
+        forget_batch=forget_batch,
+        retain_batch=retain_batch,
+        num_steps=2,
+        unlearn_lr=5e-3,
+    )
+    assert cert.num_forgotten_users == 6
+    assert cert.tabr_entries_purged >= 1
+    assert int(model.tabr_retrieval.memory_count.item()) < 12
+    assert cert.parameter_l2_drift > 0.0
+    assert cert.certified_epsilon > 0.0
+
+
+def test_fairness_governance_auditor_and_equalized_odds_optimizer():
+    """Verify FairnessGovernanceAuditor (DPD, DIR 80% rule, EOD) and EqualizedOddsThresholdOptimizer."""
+    from src.evaluation.fairness import (
+        EqualizedOddsThresholdOptimizer,
+        FairnessGovernanceAuditor,
+    )
+
+    torch.manual_seed(42)
+    auditor = FairnessGovernanceAuditor(four_fifths_threshold=0.80)
+
+    # Group 0 has low logits (high approval), Group 1 has artificially inflated logits (low approval)
+    g0_logits = torch.linspace(-2.0, 0.4, 50)
+    g1_logits = torch.linspace(-0.5, 2.0, 50)
+    logits = torch.cat([g0_logits, g1_logits])
+    targets = torch.cat([torch.zeros(40), torch.ones(10), torch.zeros(40), torch.ones(10)]).long()
+    groups = torch.cat([torch.zeros(50), torch.ones(50)]).long()
+
+    raw_report = auditor.audit_logits(logits, targets, groups, threshold=0.5)
+    assert not raw_report.passes_four_fifths_rule
+    assert raw_report.disparate_impact_ratio < 0.80
+
+    optimizer = EqualizedOddsThresholdOptimizer(default_threshold=0.5, target_fpr=0.10)
+    thresholds = optimizer.fit(logits, targets, groups)
+    assert thresholds[1] > thresholds[0]
+
+    fair_preds = optimizer.predict(logits, groups)
+    mitigated_report = auditor.audit_predictions(fair_preds, targets, groups)
+    assert mitigated_report.disparate_impact_ratio > raw_report.disparate_impact_ratio
+    assert mitigated_report.demographic_parity_diff < raw_report.demographic_parity_diff
+
+
+

@@ -23,6 +23,10 @@ from src.training.federated import (
     FederatedPrivacyConfig,
     FederatedRoundReport,
 )
+from src.training.unlearning import (
+    CertifiedLDMUnlearner,
+    UnlearningCertificate,
+)
 
 __all__ = [
     "SSLBaseLoss",
@@ -35,4 +39,6 @@ __all__ = [
     "FederatedLDMCoordinator",
     "FederatedPrivacyConfig",
     "FederatedRoundReport",
+    "CertifiedLDMUnlearner",
+    "UnlearningCertificate",
 ]
