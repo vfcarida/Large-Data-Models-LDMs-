@@ -13,6 +13,11 @@ from src.serving.authorization_service import (
     AuthorizationDecision,
     RealTimeAuthorizationService,
 )
+from src.serving.quantization_and_cascade import (
+    CascadeBenchmarkReport,
+    CascadeEarlyExitRouter,
+    quantize_ldm_dynamic_int8,
+)
 
 __all__ = [
     "LDMInferenceWrapper",
@@ -22,4 +27,7 @@ __all__ = [
     "benchmark_inference_latency",
     "AuthorizationDecision",
     "RealTimeAuthorizationService",
+    "CascadeBenchmarkReport",
+    "CascadeEarlyExitRouter",
+    "quantize_ldm_dynamic_int8",
 ]

@@ -236,20 +236,41 @@ class BenchmarkSuite:
     def evaluate_serving_latency(self) -> Dict[str, Any]:
         """
         Benchmarks single-request (`batch_size=1`) TorchScript compilation,
-        numerical parity, and millisecond p50/p95/p99 authorization latency.
+        numerical parity, millisecond p50/p95/p99 authorization latency,
+        Dynamic INT8 quantization compression, and Two-Stage Early-Exit Cascade speedup.
         """
-        from src.serving.exporter import benchmark_inference_latency
+        from src.serving.exporter import (
+            benchmark_inference_latency,
+            build_dummy_inference_inputs,
+        )
+        from src.serving.quantization_and_cascade import CascadeEarlyExitRouter
 
         logger.info(
-            "[Benchmark] Running TorchScript export & single-request SLA latency benchmark..."
+            "[Benchmark] Running TorchScript, INT8 Quantization & Early-Exit Cascade benchmark..."
         )
-        return benchmark_inference_latency(
+        metrics = benchmark_inference_latency(
             self.model,
             batch_size=1,
             seq_len=32,
             num_warmup=5,
             num_runs=30,
         )
+
+        router = CascadeEarlyExitRouter(self.model, fast_exit_threshold=0.35)
+        keys, vals, times, tab, pad = build_dummy_inference_inputs(
+            self.model, batch_size=16, seq_len=32, device=torch.device(self.device)
+        )
+        router.fit_fast_stage(keys, vals, times, tab, pad, num_steps=20)
+        cascade_report = router.benchmark_cascade(
+            keys, vals, times, tab, pad, num_runs=15
+        )
+        metrics["fp32_size_mb"] = cascade_report.fp32_size_mb
+        metrics["int8_size_mb"] = cascade_report.int8_size_mb
+        metrics["int8_compression_ratio"] = cascade_report.compression_ratio
+        metrics["int8_max_prob_diff"] = cascade_report.int8_max_prob_diff
+        metrics["cascade_fast_exit_rate"] = cascade_report.fast_exit_rate
+        metrics["cascade_speedup_factor"] = cascade_report.cascade_speedup_factor
+        return metrics
 
     def run_all(
         self,

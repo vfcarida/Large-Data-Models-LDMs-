@@ -548,7 +548,7 @@ def test_counterfactual_recourse_probability_reduction():
     )
     # Bias final classification layer slightly positive so initial probability > 0.40
     with torch.no_grad():
-        model.fusion_head.classification_head.bias.fill_(1.0)
+        model.fusion_head.final_projection.bias.fill_(1.0)
 
     explainer = LDMExplainabilityEngine(model)
     keys = torch.tensor([[14, 18, 0]], dtype=torch.long)
@@ -629,9 +629,10 @@ def test_ablation_suite_and_realtime_authorization_service():
 
     ablation = AblationBenchmarkSuite(model)
     variants = ablation.run_ablation_study(loader, support_dataloader=loader)
-    assert len(variants) == 5
+    assert len(variants) == 6
     md_table = AblationBenchmarkSuite.format_markdown_table(variants)
     assert "Full LDM" in md_table
+    assert "Multi-Task MMoE Head" in md_table
 
     auth_service = RealTimeAuthorizationService(
         model, conformal_alpha=0.10, use_torchscript=True, seq_len=8
@@ -653,4 +654,200 @@ def test_ablation_suite_and_realtime_authorization_service():
     assert payload["decision"] in ("APPROVE", "DECLINE", "HUMAN_REVIEW")
     assert 0.0 <= payload["fraud_probability"] <= 1.0
     assert payload["latency_ms"] > 0.0
+
+
+def test_selective_ssm_and_hybrid_backbone_mask_invariance():
+    """Verify SelectiveSSMBlock and HybridSSMTransformerEncoder O(S) padding-mask invariance."""
+    torch.manual_seed(42)
+    model_hybrid = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=2,
+        num_heads=2,
+        tabular_feature_size=3,
+        backbone_type="hybrid_ssm",
+    )
+    model_ssm = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=2,
+        num_heads=2,
+        tabular_feature_size=3,
+        backbone_type="ssm",
+    )
+    model_hybrid.eval()
+    model_ssm.eval()
+
+    keys = torch.randint(0, 12, (2, 10), dtype=torch.long)
+    values = torch.randn(2, 10)
+    times = torch.randint(1, 50, (2, 10), dtype=torch.long)
+    tabular = torch.randn(2, 3)
+    mask = torch.zeros(2, 10, dtype=torch.bool)
+    mask[:, 6:] = True
+
+    keys_corrupted = keys.clone()
+    values_corrupted = values.clone()
+    times_corrupted = times.clone()
+    keys_corrupted[:, 6:] = 11
+    values_corrupted[:, 6:] = 999.0
+    times_corrupted[:, 6:] = 5000
+
+    with torch.no_grad():
+        p1 = model_ssm.get_pooled_embedding(keys, values, times, key_padding_mask=mask)
+        p2 = model_ssm.get_pooled_embedding(
+            keys_corrupted, values_corrupted, times_corrupted, key_padding_mask=mask
+        )
+        assert torch.allclose(p1, p2, atol=1e-5)
+
+        out_h1 = model_hybrid(
+            keys, values, times, tabular_features=tabular, key_padding_mask=mask
+        )
+        out_h2 = model_hybrid(
+            keys_corrupted,
+            values_corrupted,
+            times_corrupted,
+            tabular_features=tabular,
+            key_padding_mask=mask,
+        )
+        assert out_h1.shape == (2, 1)
+        assert torch.allclose(out_h1, out_h2, atol=1e-5)
+
+
+def test_mmoe_multitask_head_and_homoscedastic_loss():
+    """Verify MultiGateMixtureOfExpertsHead routing simplex and HomoscedasticMultiTaskLoss."""
+    from src.models.multi_task_moe import HomoscedasticMultiTaskLoss
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+        num_experts=4,
+    )
+    keys = torch.randint(0, 10, (5, 8), dtype=torch.long)
+    values = torch.randn(5, 8)
+    times = torch.randint(1, 30, (5, 8), dtype=torch.long)
+    tabular = torch.randn(5, 3)
+
+    mt_out = model.forward_multitask(
+        packed_keys=keys,
+        packed_values=values,
+        packed_times=times,
+        tabular_features=tabular,
+    )
+    assert mt_out["fraud_logits"].shape == (5, 1)
+    assert mt_out["credit_default_logits"].shape == (5, 1)
+    assert mt_out["ltv_pred"].shape == (5, 1)
+    assert mt_out["gate_weights"].shape == (5, 3, 4)
+    gate_sums = mt_out["gate_weights"].sum(dim=-1)
+    assert torch.allclose(gate_sums, torch.ones_like(gate_sums), atol=1e-5)
+
+    loss_fn = HomoscedasticMultiTaskLoss()
+    fraud_y = torch.tensor([0, 1, 0, 1, 0], dtype=torch.float32)
+    credit_y = torch.tensor([0, 1, 1, 0, 0], dtype=torch.float32)
+    ltv_y = torch.randn(5)
+    loss_dict = loss_fn(mt_out, fraud_y, credit_y, ltv_y)
+    loss_dict["loss"].backward()
+    assert loss_fn.log_vars.grad is not None
+    assert float(loss_dict["loss"].item()) > -10.0
+
+
+def test_concept_drift_monitor_and_adaptive_conformal_abstainer():
+    """Verify ConceptDriftMonitor (PSI, MMD, Wasserstein) and AdaptiveConformalAbstainer."""
+    from src.evaluation.drift_monitor import (
+        AdaptiveConformalAbstainer,
+        ConceptDriftMonitor,
+    )
+
+    torch.manual_seed(42)
+    monitor = ConceptDriftMonitor(
+        psi_warning_threshold=0.10,
+        psi_critical_threshold=0.25,
+        feature_names=["income", "age", "credit_score"],
+    )
+    ref_tab = torch.randn(200, 3)
+    ref_amt = torch.randn(200, 10)
+    ref_emb = torch.randn(200, 16)
+    ref_prob = torch.sigmoid(torch.randn(200))
+    monitor.fit_reference(ref_tab, ref_amt, ref_emb, ref_prob)
+
+    # 1. Stationary window -> STABLE
+    stable_report = monitor.evaluate_window(
+        ref_tab + 0.01 * torch.randn_like(ref_tab),
+        ref_amt + 0.01 * torch.randn_like(ref_amt),
+        ref_emb + 0.01 * torch.randn_like(ref_emb),
+        ref_prob,
+    )
+    assert stable_report.status == "STABLE"
+    assert stable_report.max_feature_psi < 0.10
+
+    # 2. Shifted window -> CRITICAL_DRIFT
+    drifted_report = monitor.evaluate_window(
+        ref_tab + 2.5,
+        ref_amt + 3.0,
+        ref_emb + 2.0,
+        torch.clamp(ref_prob + 0.4, 0.0, 1.0),
+    )
+    assert drifted_report.status == "CRITICAL_DRIFT"
+    assert drifted_report.max_feature_psi >= 0.25
+    assert drifted_report.embedding_mmd > 0.10
+    assert drifted_report.probability_wasserstein > 0.10
+
+    # 3. Online Adaptive Conformal Inference (ACI)
+    aci = AdaptiveConformalAbstainer(alpha_target=0.10, gamma=0.10)
+    cal_logits = torch.cat([torch.full((50,), -2.0), torch.full((50,), 2.0)])
+    cal_targets = torch.cat([torch.zeros(50), torch.ones(50)]).long()
+    aci.calibrate(cal_logits, cal_targets)
+    initial_alpha = aci.effective_alpha
+
+    # Simulate high-error drifted window -> effective_alpha must decrease
+    bad_logits = torch.full((20,), 2.5)
+    bad_targets = torch.zeros(20, dtype=torch.long)
+    step_info = aci.update_online(bad_logits, bad_targets)
+    assert step_info["observed_error_rate"] > 0.50
+    assert step_info["effective_alpha"] < initial_alpha
+
+
+def test_dynamic_int8_quantization_and_cascade_early_exit_router():
+    """Verify quantize_ldm_dynamic_int8 compression and CascadeEarlyExitRouter execution."""
+    from src.serving.quantization_and_cascade import (
+        CascadeEarlyExitRouter,
+        quantize_ldm_dynamic_int8,
+    )
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=32,
+        num_layers=2,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    model.eval()
+
+    quant_model, q_metrics = quantize_ldm_dynamic_int8(model, seq_len=8)
+    assert q_metrics["fp32_size_mb"] > 0.0
+    assert q_metrics["int8_size_mb"] > 0.0
+    assert q_metrics["int8_max_prob_diff"] < 0.25
+
+    router = CascadeEarlyExitRouter(model, fast_exit_threshold=0.90)
+    keys = torch.randint(0, 12, (12, 8), dtype=torch.long)
+    vals = torch.randn(12, 8)
+    times = torch.randint(1, 50, (12, 8), dtype=torch.long)
+    tab = torch.randn(12, 3)
+    pad = torch.zeros(12, 8, dtype=torch.bool)
+
+    distill_loss = router.fit_fast_stage(keys, vals, times, tab, pad, num_steps=15)
+    assert distill_loss >= 0.0
+
+    logits, exited_early = router(keys, vals, times, tab, pad)
+    assert logits.shape == (12, 1)
+    assert exited_early.shape == (12,)
+
+    report = router.benchmark_cascade(keys, vals, times, tab, pad, num_runs=5)
+    assert report.compression_ratio > 0.5
+    assert 0.0 <= report.fast_exit_rate <= 1.0
+
 

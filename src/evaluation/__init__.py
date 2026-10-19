@@ -31,6 +31,14 @@ from src.evaluation.explainability import (
     LDMExplainabilityEngine,
 )
 from src.evaluation.ablation_suite import AblationBenchmarkSuite, AblationVariantMetrics
+from src.evaluation.drift_monitor import (
+    DriftReport,
+    ConceptDriftMonitor,
+    AdaptiveConformalAbstainer,
+    compute_psi,
+    compute_mmd_rbf,
+    compute_wasserstein_1d,
+)
 from src.evaluation.benchmarks import BenchmarkSuite
 
 __all__ = [
@@ -51,5 +59,11 @@ __all__ = [
     "LDMExplainabilityEngine",
     "AblationBenchmarkSuite",
     "AblationVariantMetrics",
+    "DriftReport",
+    "ConceptDriftMonitor",
+    "AdaptiveConformalAbstainer",
+    "compute_psi",
+    "compute_mmd_rbf",
+    "compute_wasserstein_1d",
     "BenchmarkSuite",
 ]

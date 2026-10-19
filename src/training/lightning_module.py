@@ -369,6 +369,32 @@ class LDMFineTuningModule(pl.LightningModule):
             )
             loss = loss + pfn_loss
 
+        # Multi-Task Mixture-of-Experts (MMoE) training on detached representations
+        if getattr(self.model, "mmoe_head", None) is not None and batch.get("tabular") is not None:
+            mmoe_out = self.model.forward_multitask(
+                packed_keys=batch["packed_keys"],
+                packed_values=batch["packed_values"],
+                packed_times=batch["packed_times"],
+                tabular_features=batch["tabular"],
+                key_padding_mask=batch.get("key_padding_mask"),
+                detach_backbone=True,
+            )
+            mmoe_fraud_loss = F.binary_cross_entropy_with_logits(
+                mmoe_out["fraud_logits"],
+                labels,
+                pos_weight=self.pos_weight_tensor.to(logits.device),
+            )
+            credit_targets = (
+                (batch["tabular"][:, 0:1] > 0.25).float() * 0.5 + labels * 0.5 >= 0.5
+            ).float()
+            mmoe_credit_loss = F.binary_cross_entropy_with_logits(
+                mmoe_out["credit_default_logits"],
+                credit_targets,
+            )
+            ltv_targets = batch["packed_values"].mean(dim=1, keepdim=True).detach()
+            mmoe_ltv_loss = F.huber_loss(mmoe_out["ltv_pred"], ltv_targets)
+            loss = loss + mmoe_fraud_loss + 0.5 * mmoe_credit_loss + 0.25 * mmoe_ltv_loss
+
         with torch.no_grad():
             probs = torch.sigmoid(logits)
             preds = (probs >= self.threshold).float()
@@ -513,6 +539,8 @@ class LDMFineTuningModule(pl.LightningModule):
             head_params.extend(list(self.model.tabr_retrieval.parameters()))
         if self.model.pfn_head is not None:
             head_params.extend(list(self.model.pfn_head.parameters()))
+        if getattr(self.model, "mmoe_head", None) is not None:
+            head_params.extend(list(self.model.mmoe_head.parameters()))
 
         param_groups = [
             {"params": encoder_params, "lr": self.learning_rate * 0.25},

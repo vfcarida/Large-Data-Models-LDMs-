@@ -84,6 +84,7 @@ class AblationBenchmarkSuite:
         logits_mmtt_gnn: List[torch.Tensor] = []
         logits_full: List[torch.Tensor] = []
         logits_pfn: List[torch.Tensor] = []
+        logits_mmoe: List[torch.Tensor] = []
         all_labels_list: List[torch.Tensor] = []
 
         # Prepare a representative multi-batch support cohort for InContextPFNHead
@@ -179,11 +180,21 @@ class AblationBenchmarkSuite:
                 support_padding_mask=sup_pad,
             )
 
+            # Variant 6: Multi-Gate Mixture-of-Experts Head (Fraud + Credit + LTV)
+            out_mmoe = self.model.forward_multitask(
+                packed_keys=keys,
+                packed_values=vals,
+                packed_times=times,
+                tabular_features=tab,
+                key_padding_mask=pad,
+            )["fraud_logits"]
+
             logits_tabular_only.append(out_tab_only.cpu())
             logits_mmtt_only.append(out_mmtt_only.cpu())
             logits_mmtt_gnn.append(out_mmtt_gnn.cpu())
             logits_full.append(out_full.cpu())
             logits_pfn.append(out_pfn.cpu())
+            logits_mmoe.append(out_mmoe.cpu())
             all_labels_list.append(labels.cpu())
 
         if was_training:
@@ -197,6 +208,7 @@ class AblationBenchmarkSuite:
             ("3. MMTT + RelBench Bipartite GNN + DCNv2", torch.cat(logits_mmtt_gnn, dim=0)),
             ("4. Full LDM (MMTT + GNN + TabR + DCNv2)", torch.cat(logits_full, dim=0)),
             ("5. In-Context PFN Head (Cold-Start ICL)", torch.cat(logits_pfn, dim=0)),
+            ("6. Multi-Task MMoE Head (Fraud + Credit + LTV)", torch.cat(logits_mmoe, dim=0)),
         ]
 
         results: List[AblationVariantMetrics] = []

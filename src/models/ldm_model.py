@@ -59,10 +59,12 @@ import torch
 import torch.nn as nn
 
 from src.models.transformer_backbone import MMTTTransformerEncoder
+from src.models.ssm_backbone import HybridSSMTransformerEncoder
 from src.models.joint_fusion_network import EndToEndFusionLayer
 from src.models.retrieval_attention import TabRRetrievalModule
 from src.models.relational_gnn import RelationalEntityGNN
 from src.models.in_context_pfn import InContextPFNHead
+from src.models.multi_task_moe import MultiGateMixtureOfExpertsHead
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +72,14 @@ logger = logging.getLogger(__name__)
 class LargeDataModel(nn.Module):
     """
     Complete Large Data Model supporting self-supervised pre-training,
-    relational-retrieval-augmented supervised fine-tuning, and in-context
-    prior-data fitted inference.
+    relational-retrieval-augmented supervised fine-tuning, in-context
+    prior-data fitted inference, and multi-task Mixture-of-Experts (`MMoE`)
+    decisioning.
 
     Args:
         vocab_size: Number of unique categorical tokens (MCC codes).
-        hidden_size: Transformer hidden dimension (`d_model`).
-        num_layers: Number of Transformer encoder layers.
+        hidden_size: Transformer / SSM hidden dimension (`d_model`).
+        num_layers: Number of sequence encoder layers.
         num_heads: Number of attention heads.
         dropout: Dropout probability.
         tabular_feature_size: Number of static tabular features for fusion.
@@ -89,6 +92,8 @@ class LargeDataModel(nn.Module):
         use_tabr_retrieval: Enable differentiable kNN context retrieval (`TabR`).
         tabr_top_k: Number of nearest neighbors retrieved in `TabRRetrievalModule`.
         tabr_memory_size: Capacity of the persistent historical memory bank.
+        backbone_type: Sequence encoder architecture (`"mmtt"`, `"hybrid_ssm"`, or `"ssm"`).
+        num_experts: Number of shared experts in `MultiGateMixtureOfExpertsHead`.
     """
 
     def __init__(
@@ -108,6 +113,8 @@ class LargeDataModel(nn.Module):
         use_tabr_retrieval: bool = True,
         tabr_top_k: int = 8,
         tabr_memory_size: int = 512,
+        backbone_type: Literal["mmtt", "hybrid_ssm", "ssm"] = "mmtt",
+        num_experts: int = 4,
     ):
         super().__init__()
 
@@ -126,18 +133,35 @@ class LargeDataModel(nn.Module):
         self.use_tabr_retrieval = use_tabr_retrieval
         self.tabr_top_k = tabr_top_k
         self.tabr_memory_size = tabr_memory_size
+        self.backbone_type = backbone_type
+        self.num_experts = num_experts
 
-        # 1. Shared MMTT Transformer Backbone
-        self.encoder = MMTTTransformerEncoder(
-            vocab_size=vocab_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            dropout=dropout,
-            use_virtual_tokens=use_virtual_tokens,
-            num_virtual_tokens=num_virtual_tokens,
-            pooling=pooling,
-        )
+        # 1. Shared Sequence Backbone (MMTT Transformer or Hybrid Selective SSM)
+        if backbone_type == "mmtt":
+            self.encoder: nn.Module = MMTTTransformerEncoder(
+                vocab_size=vocab_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                dropout=dropout,
+                use_virtual_tokens=use_virtual_tokens,
+                num_virtual_tokens=num_virtual_tokens,
+                pooling=pooling,
+            )
+        elif backbone_type in ("hybrid_ssm", "ssm"):
+            self.encoder = HybridSSMTransformerEncoder(
+                vocab_size=vocab_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                dropout=dropout,
+                use_virtual_tokens=use_virtual_tokens,
+                num_virtual_tokens=num_virtual_tokens,
+                pooling=pooling,
+                mode=backbone_type,
+            )
+        else:
+            raise ValueError(f"Unsupported backbone_type: {backbone_type}")
 
         # 2. Self-Supervised Multi-Modal Reconstruction Heads (PRAGMA / LimiX)
         self.ssl_key_head = nn.Linear(hidden_size, vocab_size)
@@ -190,10 +214,18 @@ class LargeDataModel(nn.Module):
             dropout=dropout,
         )
 
+        # 7. Horizon Track 4: Multi-Gate Mixture-of-Experts Multi-Task Head (MMoE)
+        self.mmoe_head = MultiGateMixtureOfExpertsHead(
+            input_dim=hidden_size + tabular_feature_size,
+            expert_dim=hidden_size,
+            num_experts=num_experts,
+            dropout=dropout,
+        )
+
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         logger.info(
-            f"LargeDataModel created: {total_params:,} total params, "
+            f"LargeDataModel created ({backbone_type}): {total_params:,} total params, "
             f"{trainable_params:,} trainable params"
         )
 
@@ -432,6 +464,63 @@ class LargeDataModel(nn.Module):
             support_labels=support_labels,
         )
 
+    def forward_multitask(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        tabular_features: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        detach_backbone: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Executes Multi-Gate Mixture-of-Experts (`MMoE`) joint inference for
+        Real-Time Fraud Risk, 90-Day Credit Delinquency, and Customer LTV.
+
+        Args:
+            packed_keys: Categorical token indices `[B, S]`.
+            packed_values: Continuous transaction amounts `[B, S]`.
+            packed_times: Temporal delta indices `[B, S]`.
+            tabular_features: Static tabular features `[B, T]`.
+            key_padding_mask: Optional boolean padding mask `[B, S]`.
+            detach_backbone: If True, detaches backbone representations before MMoE.
+
+        Returns:
+            Dictionary with `"fraud_logits"`, `"credit_default_logits"`,
+            `"ltv_pred"`, and `"gate_weights"`.
+        """
+        if detach_backbone:
+            with torch.no_grad():
+                enriched = self.get_enriched_representation(
+                    packed_keys=packed_keys,
+                    packed_values=packed_values,
+                    packed_times=packed_times,
+                    key_padding_mask=key_padding_mask,
+                    update_memory=False,
+                )
+            enriched = enriched.detach()
+        else:
+            enriched = self.get_enriched_representation(
+                packed_keys=packed_keys,
+                packed_values=packed_values,
+                packed_times=packed_times,
+                key_padding_mask=key_padding_mask,
+                update_memory=False,
+            )
+
+        if tabular_features is None:
+            tabular_features = torch.zeros(
+                enriched.size(0),
+                self.tabular_feature_size,
+                device=enriched.device,
+                dtype=enriched.dtype,
+            )
+        elif detach_backbone:
+            tabular_features = tabular_features.detach()
+
+        joint_features = torch.cat([enriched, tabular_features], dim=-1)
+        return self.mmoe_head(joint_features)
+
     def freeze_encoder(self) -> None:
         """Freezes the Transformer encoder parameters during linear/head probing."""
         for param in self.encoder.parameters():
@@ -470,6 +559,8 @@ class LargeDataModel(nn.Module):
                 "use_tabr_retrieval": bool(self.use_tabr_retrieval),
                 "tabr_top_k": int(self.tabr_top_k),
                 "tabr_memory_size": int(self.tabr_memory_size),
+                "backbone_type": str(self.backbone_type),
+                "num_experts": int(self.num_experts),
             },
         }
         if extra_info:

@@ -31,10 +31,15 @@ from src.models.transformer_backbone import (
     SinusoidalPositionalEncoding,
     VirtualTokenLayer,
 )
+from src.models.ssm_backbone import SelectiveSSMBlock, HybridSSMTransformerEncoder
 from src.models.joint_fusion_network import EndToEndFusionLayer, CrossNetworkV2
 from src.models.retrieval_attention import TabRRetrievalModule
 from src.models.relational_gnn import RelationalEntityGNN, BipartiteGraphConvLayer
 from src.models.in_context_pfn import InContextPFNHead
+from src.models.multi_task_moe import (
+    MultiGateMixtureOfExpertsHead,
+    HomoscedasticMultiTaskLoss,
+)
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -42,11 +47,15 @@ __all__ = [
     "PeriodicNumericalEmbedding",
     "SinusoidalPositionalEncoding",
     "VirtualTokenLayer",
+    "SelectiveSSMBlock",
+    "HybridSSMTransformerEncoder",
     "EndToEndFusionLayer",
     "CrossNetworkV2",
     "TabRRetrievalModule",
     "RelationalEntityGNN",
     "BipartiteGraphConvLayer",
     "InContextPFNHead",
+    "MultiGateMixtureOfExpertsHead",
+    "HomoscedasticMultiTaskLoss",
     "LargeDataModel",
 ]

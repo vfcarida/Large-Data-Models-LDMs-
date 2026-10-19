@@ -1,6 +1,6 @@
 # LDM Training & Governance Evaluation Report
 
-**Generated**: 2026-10-19 15:43:49
+**Generated**: 2026-10-19 16:30:14
 **Config**: small
 
 ---
@@ -30,63 +30,70 @@
 
 | Phase | Epochs | Learning Rate | Duration |
 |-------|--------|--------------|----------|
-| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 17.4s |
-| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 28.2s |
+| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 124.8s |
+| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 626.3s |
 
 ## Test & Governance Evaluation Results
 
 | Metric | Value |
 |--------|-------|
-| test/loss | 1.8318 |
-| test/auc | 0.8167 |
-| test/pr_auc | 0.3100 |
-| test/f1 | 0.2222 |
+| test/loss | 2.4407 |
+| test/auc | 0.8140 |
+| test/pr_auc | 0.3219 |
+| test/f1 | 0.1667 |
 | test/recall_at_5pct_fpr | 0.1429 |
-| test/brier_score | 0.1860 |
-| test/ece | 0.1951 |
-| benchmark/auc | 0.8167 |
-| benchmark/pr_auc | 0.3100 |
-| benchmark/f1_score | 0.2222 |
+| test/brier_score | 0.1366 |
+| test/ece | 0.1581 |
+| benchmark/auc | 0.8140 |
+| benchmark/pr_auc | 0.3219 |
+| benchmark/f1_score | 0.1667 |
 | benchmark/recall_at_5pct_fpr | 0.1429 |
-| benchmark/brier_score | 0.1860 |
-| benchmark/ece | 0.1951 |
-| benchmark/precision | 0.1818 |
-| benchmark/recall | 0.2857 |
-| benchmark/specificity | 0.8302 |
-| benchmark/accuracy | 0.7667 |
-| benchmark/tp | 2 |
-| benchmark/fp | 9 |
-| benchmark/fn | 5 |
-| benchmark/tn | 44 |
+| benchmark/brier_score | 0.1366 |
+| benchmark/ece | 0.1581 |
+| benchmark/precision | 0.2000 |
+| benchmark/recall | 0.1429 |
+| benchmark/specificity | 0.9245 |
+| benchmark/accuracy | 0.8333 |
+| benchmark/tp | 1 |
+| benchmark/fp | 4 |
+| benchmark/fn | 6 |
+| benchmark/tn | 49 |
 | benchmark/conformal_coverage | 0.8667 |
 | benchmark/conformal_abstention_rate | 0.1333 |
-| benchmark/conformal_selective_accuracy | 0.8269 |
-| benchmark/conformal_selective_f1 | 0.1818 |
-| benchmark/conformal_lower_threshold | 0.1217 |
-| benchmark/conformal_upper_threshold | 0.9500 |
-| benchmark/clean_auc | 0.8167 |
-| benchmark/random_shift_auc | 0.8167 |
-| benchmark/fgsm_auc | 0.8032 |
+| benchmark/conformal_selective_accuracy | 0.9038 |
+| benchmark/conformal_selective_f1 | 0.2857 |
+| benchmark/conformal_lower_threshold | 0.0613 |
+| benchmark/conformal_upper_threshold | 0.9290 |
+| benchmark/clean_auc | 0.8140 |
+| benchmark/random_shift_auc | 0.8140 |
+| benchmark/fgsm_auc | 0.7898 |
 | benchmark/random_degradation | 0.0000 |
-| benchmark/fgsm_degradation | 0.0135 |
-| benchmark/eager_p50_ms | 6.9719 |
-| benchmark/eager_p95_ms | 10.5880 |
-| benchmark/eager_p99_ms | 25.1241 |
-| benchmark/torchscript_p50_ms | 4.2061 |
-| benchmark/torchscript_p95_ms | 7.1361 |
-| benchmark/torchscript_p99_ms | 14.4487 |
-| benchmark/torchscript_throughput_rps | 202.1621 |
+| benchmark/fgsm_degradation | 0.0243 |
+| benchmark/eager_p50_ms | 11.3461 |
+| benchmark/eager_p95_ms | 19.6803 |
+| benchmark/eager_p99_ms | 20.3743 |
+| benchmark/torchscript_p50_ms | 12.2560 |
+| benchmark/torchscript_p95_ms | 23.9463 |
+| benchmark/torchscript_p99_ms | 31.8403 |
+| benchmark/torchscript_throughput_rps | 75.9820 |
 | benchmark/torchscript_parity_max_diff | 0.0000 |
+| benchmark/fp32_size_mb | 3.7471 |
+| benchmark/int8_size_mb | 3.1347 |
+| benchmark/int8_compression_ratio | 1.1954 |
+| benchmark/int8_max_prob_diff | 0.0000 |
+| benchmark/cascade_fast_exit_rate | 1.0000 |
+| benchmark/cascade_speedup_factor | 13.0295 |
 
 ## Architectural Ablation Study
 
 | Architectural Variant | ROC-AUC | PR-AUC | Brier Score | ECE |
 | :--- | :---: | :---: | :---: | :---: |
-| 1. Static Tabular + DCNv2 Only | 0.5121 | 0.1530 | 0.2171 | 0.3262 |
-| 2. MMTT + PLR + DCNv2 | 0.8194 | 0.3827 | 0.1482 | 0.1563 |
-| 3. MMTT + RelBench Bipartite GNN + DCNv2 | 0.8140 | 0.3779 | 0.1723 | 0.1869 |
-| 4. Full LDM (MMTT + GNN + TabR + DCNv2) | 0.8167 | 0.3100 | 0.1860 | 0.1951 |
-| 5. In-Context PFN Head (Cold-Start ICL) | 0.8005 | 0.2623 | 0.1810 | 0.1955 |
+| 1. Static Tabular + DCNv2 Only | 0.4582 | 0.1205 | 0.2374 | 0.3474 |
+| 2. MMTT + PLR + DCNv2 | 0.8383 | 0.4150 | 0.1109 | 0.1013 |
+| 3. MMTT + RelBench Bipartite GNN + DCNv2 | 0.8383 | 0.4201 | 0.1248 | 0.1324 |
+| 4. Full LDM (MMTT + GNN + TabR + DCNv2) | 0.8140 | 0.3219 | 0.1366 | 0.1581 |
+| 5. In-Context PFN Head (Cold-Start ICL) | 0.7763 | 0.3080 | 0.1616 | 0.1719 |
+| 6. Multi-Task MMoE Head (Fraud + Credit + LTV) | 0.8032 | 0.3215 | 0.1392 | 0.1447 |
 
 ---
 
