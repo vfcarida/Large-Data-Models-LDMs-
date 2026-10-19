@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ldm-research-lab"
-version = "0.3.0"
+version = "0.4.0"
 description = "Large Data Models (LDMs) — Self-Supervised Foundation Models for Multi-Modal-Temporal-Tabular (MMTT) Financial Sequences and Calibrated Risk Classification"
 readme = "README.md"
 license = { text = "MIT" }

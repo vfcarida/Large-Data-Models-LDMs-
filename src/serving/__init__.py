@@ -1,5 +1,5 @@
 """
-Serving & Low-Latency Export Sub-Package.
+Serving, Low-Latency Export & Real-Time Authorization Sub-Package.
 """
 
 from src.serving.exporter import (
@@ -9,6 +9,10 @@ from src.serving.exporter import (
     export_to_onnx,
     benchmark_inference_latency,
 )
+from src.serving.authorization_service import (
+    AuthorizationDecision,
+    RealTimeAuthorizationService,
+)
 
 __all__ = [
     "LDMInferenceWrapper",
@@ -16,4 +20,6 @@ __all__ = [
     "export_to_torchscript",
     "export_to_onnx",
     "benchmark_inference_latency",
+    "AuthorizationDecision",
+    "RealTimeAuthorizationService",
 ]

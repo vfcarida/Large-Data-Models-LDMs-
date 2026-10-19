@@ -487,3 +487,170 @@ def test_torchscript_export_parity_and_latency_benchmark(tmp_path):
     assert latency_stats["torchscript_p99_ms"] > 0.0
     assert latency_stats["torchscript_throughput_rps"] > 0.0
 
+
+# =============================================================================
+# 7. Round 3 (v0.4.0) Tests: Explainability, Federated DP-SSL, Ablation & Auth
+# =============================================================================
+
+
+def test_explainability_integrated_gradients_and_adverse_reasons():
+    """Verify Integrated Gradients padding-mask zeroing and Adverse Action Reason extraction."""
+    from src.evaluation.explainability import LDMExplainabilityEngine
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=20,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    model.eval()
+    explainer = LDMExplainabilityEngine(model)
+
+    keys = torch.tensor([[14, 18, 19, 0, 0]], dtype=torch.long)
+    values = torch.tensor([[1.5, 2.8, -0.5, 99.0, 99.0]], dtype=torch.float32)
+    times = torch.tensor([[0, 2, 1, 0, 0]], dtype=torch.long)
+    tabular = torch.tensor([[-1.2, 0.8, -0.4]], dtype=torch.float32)
+    pad_mask = torch.tensor([[False, False, False, True, True]], dtype=torch.bool)
+
+    ig_dict = explainer.compute_integrated_gradients(
+        keys, values, times, tabular, key_padding_mask=pad_mask, num_steps=8
+    )
+    val_attr = ig_dict["value_attributions"]
+    ev_share = ig_dict["event_importance_share"]
+
+    assert val_attr.shape == (1, 5)
+    # Padded positions [0, 3] and [0, 4] must have strictly 0.0 attribution
+    assert val_attr[0, 3].item() == 0.0
+    assert val_attr[0, 4].item() == 0.0
+    assert torch.allclose(ev_share[:, :3].sum(dim=-1), torch.ones(1), atol=1e-5)
+
+    reasons = explainer.extract_adverse_action_reasons(
+        keys, values, times, tabular, key_padding_mask=pad_mask, top_k_events=2, top_k_tabular=2
+    )
+    assert len(reasons) == 1
+    assert len(reasons[0]) == 4
+    assert all(r.event_index not in (3, 4) for r in reasons[0])
+
+
+def test_counterfactual_recourse_probability_reduction():
+    """Verify sparse counterfactual recourse reduces risk probability while respecting padding."""
+    from src.evaluation.explainability import LDMExplainabilityEngine
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=20,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    # Bias final classification layer slightly positive so initial probability > 0.40
+    with torch.no_grad():
+        model.fusion_head.classification_head.bias.fill_(1.0)
+
+    explainer = LDMExplainabilityEngine(model)
+    keys = torch.tensor([[14, 18, 0]], dtype=torch.long)
+    values = torch.tensor([[2.0, 3.0, 0.0]], dtype=torch.float32)
+    times = torch.tensor([[0, 1, 0]], dtype=torch.long)
+    tabular = torch.tensor([[1.0, -0.5, 0.2]], dtype=torch.float32)
+    pad_mask = torch.tensor([[False, False, True]], dtype=torch.bool)
+
+    recourse = explainer.generate_counterfactual_recourse(
+        keys,
+        values,
+        times,
+        tabular,
+        key_padding_mask=pad_mask,
+        target_probability=0.30,
+        max_steps=25,
+        step_size=0.25,
+    )
+    assert recourse.counterfactual_probability < recourse.initial_probability
+    assert recourse.success
+    # Padded index [0, 2] must have zero counterfactual perturbation
+    assert recourse.delta_values[0, 2].item() == 0.0
+
+
+def test_federated_dp_ssl_coordinator_and_privacy_accountant():
+    """Verify Cross-Silo Federated SSL (FedProx + L2 Clipping + DP Noise)."""
+    from src.training.federated import FederatedLDMCoordinator, FederatedPrivacyConfig
+
+    torch.manual_seed(42)
+    global_model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    privacy_cfg = FederatedPrivacyConfig(
+        enable_dp=True,
+        max_grad_norm=0.5,
+        noise_multiplier=0.05,
+        delta=1e-5,
+        proximal_mu=0.02,
+    )
+    coordinator = FederatedLDMCoordinator(global_model, privacy_config=privacy_cfg)
+
+    gen_1 = SyntheticTransactionGenerator(num_users=12, min_transactions=5, max_transactions=8, fraud_rate=0.25, seed=11)
+    gen_2 = SyntheticTransactionGenerator(num_users=12, min_transactions=5, max_transactions=8, fraud_rate=0.25, seed=22)
+    loader_1 = DataLoader(FinancialEventDataset(gen_1.generate(), max_seq_len=8), batch_size=6, collate_fn=dynamic_sequence_packing_collate_fn)
+    loader_2 = DataLoader(FinancialEventDataset(gen_2.generate(), max_seq_len=8), batch_size=6, collate_fn=dynamic_sequence_packing_collate_fn)
+
+    report = coordinator.run_federated_ssl_round(
+        [loader_1, loader_2], local_steps_per_client=1, learning_rate=1e-3, seed=42
+    )
+    assert report.round_idx == 1
+    assert report.num_clients == 2
+    assert report.mean_client_ssl_loss > 0.0
+    assert report.cumulative_dp_epsilon > 0.0
+
+
+def test_ablation_suite_and_realtime_authorization_service():
+    """Verify AblationBenchmarkSuite and RealTimeAuthorizationService end-to-end."""
+    from src.evaluation.ablation_suite import AblationBenchmarkSuite
+    from src.serving.authorization_service import RealTimeAuthorizationService
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    model.eval()
+
+    gen = SyntheticTransactionGenerator(num_users=16, min_transactions=5, max_transactions=8, fraud_rate=0.25, seed=42)
+    ds = FinancialEventDataset(gen.generate(), max_seq_len=8)
+    loader = DataLoader(ds, batch_size=8, collate_fn=dynamic_sequence_packing_collate_fn)
+
+    ablation = AblationBenchmarkSuite(model)
+    variants = ablation.run_ablation_study(loader, support_dataloader=loader)
+    assert len(variants) == 5
+    md_table = AblationBenchmarkSuite.format_markdown_table(variants)
+    assert "Full LDM" in md_table
+
+    auth_service = RealTimeAuthorizationService(
+        model, conformal_alpha=0.10, use_torchscript=True, seq_len=8
+    )
+    cal_logits = torch.tensor([[-2.0], [2.0], [-1.5], [1.8]], dtype=torch.float32)
+    cal_targets = torch.tensor([0, 1, 0, 1], dtype=torch.long)
+    auth_service.calibrate_governance(cal_logits, cal_targets)
+
+    sample = next(iter(loader))
+    decision = auth_service.authorize(
+        packed_keys=sample["packed_keys"][:1],
+        packed_values=sample["packed_values"][:1],
+        packed_times=sample["packed_times"][:1],
+        tabular_features=sample["tabular"][:1],
+        key_padding_mask=sample["key_padding_mask"][:1],
+        explain_on_adverse=True,
+    )
+    payload = decision.to_dict()
+    assert payload["decision"] in ("APPROVE", "DECLINE", "HUMAN_REVIEW")
+    assert 0.0 <= payload["fraud_probability"] <= 1.0
+    assert payload["latency_ms"] > 0.0
+

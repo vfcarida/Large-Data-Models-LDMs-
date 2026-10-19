@@ -343,6 +343,32 @@ class LDMFineTuningModule(pl.LightningModule):
             pos_weight=self.pos_weight_tensor.to(logits.device),
         )
 
+        # Episodic training of the In-Context PFN head on detached representations
+        batch_size = int(labels.shape[0])
+        if batch_size >= 4 and batch.get("tabular") is not None:
+            half = batch_size // 2
+            pad = batch.get("key_padding_mask")
+            pfn_logits = self.model.forward_in_context(
+                query_keys=batch["packed_keys"][half:],
+                query_values=batch["packed_values"][half:],
+                query_times=batch["packed_times"][half:],
+                query_tabular=batch["tabular"][half:],
+                support_keys=batch["packed_keys"][:half],
+                support_values=batch["packed_values"][:half],
+                support_times=batch["packed_times"][:half],
+                support_tabular=batch["tabular"][:half],
+                support_labels=labels[:half],
+                query_padding_mask=pad[half:] if pad is not None else None,
+                support_padding_mask=pad[:half] if pad is not None else None,
+                detach_backbone=True,
+            )
+            pfn_loss = F.binary_cross_entropy_with_logits(
+                pfn_logits,
+                labels[half:],
+                pos_weight=self.pos_weight_tensor.to(logits.device),
+            )
+            loss = loss + pfn_loss
+
         with torch.no_grad():
             probs = torch.sigmoid(logits)
             preds = (probs >= self.threshold).float()
@@ -485,6 +511,8 @@ class LDMFineTuningModule(pl.LightningModule):
             head_params.extend(list(self.model.relational_gnn.parameters()))
         if self.model.tabr_retrieval is not None:
             head_params.extend(list(self.model.tabr_retrieval.parameters()))
+        if self.model.pfn_head is not None:
+            head_params.extend(list(self.model.pfn_head.parameters()))
 
         param_groups = [
             {"params": encoder_params, "lr": self.learning_rate * 0.25},

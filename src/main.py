@@ -332,6 +332,17 @@ def run_finetuning(
     for k, v in suite_results.items():
         combined_results[f"benchmark/{k}"] = v
 
+    from src.evaluation.ablation_suite import AblationBenchmarkSuite
+
+    ablation_runner = AblationBenchmarkSuite(model, device=device)
+    ablation_metrics = ablation_runner.run_ablation_study(
+        data_module.test_dataloader(),
+        support_dataloader=data_module.train_dataloader(),
+    )
+    combined_results["_ablation_markdown"] = AblationBenchmarkSuite.format_markdown_table(
+        ablation_metrics
+    )
+
     finetune_path = results_dir / "ldm_finetuned.pt"
     model.save_checkpoint(
         str(finetune_path),
@@ -354,6 +365,8 @@ def generate_report(
     logger.info("=" * 70)
     logger.info("GENERATING RESULTS REPORT")
     logger.info("=" * 70)
+
+    ablation_md = test_results.pop("_ablation_markdown", None)
 
     report = f"""# LDM Training & Governance Evaluation Report
 
@@ -400,6 +413,9 @@ def generate_report(
             report += f"| {key} | {value:.4f} |\n"
         else:
             report += f"| {key} | {value} |\n"
+
+    if ablation_md:
+        report += f"\n## Architectural Ablation Study\n\n{ablation_md}\n"
 
     report += """
 ---

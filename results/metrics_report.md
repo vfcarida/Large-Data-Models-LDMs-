@@ -1,6 +1,6 @@
 # LDM Training & Governance Evaluation Report
 
-**Generated**: 2026-10-19 15:21:22
+**Generated**: 2026-10-19 15:43:49
 **Config**: small
 
 ---
@@ -30,53 +30,63 @@
 
 | Phase | Epochs | Learning Rate | Duration |
 |-------|--------|--------------|----------|
-| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 20.2s |
-| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 20.1s |
+| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 17.4s |
+| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 28.2s |
 
 ## Test & Governance Evaluation Results
 
 | Metric | Value |
 |--------|-------|
-| test/loss | 2.7431 |
-| test/auc | 0.7951 |
-| test/pr_auc | 0.3712 |
-| test/f1 | 0.1333 |
+| test/loss | 1.8318 |
+| test/auc | 0.8167 |
+| test/pr_auc | 0.3100 |
+| test/f1 | 0.2222 |
 | test/recall_at_5pct_fpr | 0.1429 |
-| test/brier_score | 0.1873 |
-| test/ece | 0.2032 |
-| benchmark/auc | 0.7951 |
-| benchmark/pr_auc | 0.3712 |
-| benchmark/f1_score | 0.1333 |
+| test/brier_score | 0.1860 |
+| test/ece | 0.1951 |
+| benchmark/auc | 0.8167 |
+| benchmark/pr_auc | 0.3100 |
+| benchmark/f1_score | 0.2222 |
 | benchmark/recall_at_5pct_fpr | 0.1429 |
-| benchmark/brier_score | 0.1873 |
-| benchmark/ece | 0.2032 |
-| benchmark/precision | 0.1250 |
-| benchmark/recall | 0.1429 |
-| benchmark/specificity | 0.8679 |
-| benchmark/accuracy | 0.7833 |
-| benchmark/tp | 1 |
-| benchmark/fp | 7 |
-| benchmark/fn | 6 |
-| benchmark/tn | 46 |
+| benchmark/brier_score | 0.1860 |
+| benchmark/ece | 0.1951 |
+| benchmark/precision | 0.1818 |
+| benchmark/recall | 0.2857 |
+| benchmark/specificity | 0.8302 |
+| benchmark/accuracy | 0.7667 |
+| benchmark/tp | 2 |
+| benchmark/fp | 9 |
+| benchmark/fn | 5 |
+| benchmark/tn | 44 |
 | benchmark/conformal_coverage | 0.8667 |
 | benchmark/conformal_abstention_rate | 0.1333 |
-| benchmark/conformal_selective_accuracy | 0.8654 |
-| benchmark/conformal_selective_f1 | 0.2222 |
-| benchmark/conformal_lower_threshold | 0.0500 |
+| benchmark/conformal_selective_accuracy | 0.8269 |
+| benchmark/conformal_selective_f1 | 0.1818 |
+| benchmark/conformal_lower_threshold | 0.1217 |
 | benchmark/conformal_upper_threshold | 0.9500 |
-| benchmark/clean_auc | 0.7951 |
-| benchmark/random_shift_auc | 0.7951 |
-| benchmark/fgsm_auc | 0.7790 |
+| benchmark/clean_auc | 0.8167 |
+| benchmark/random_shift_auc | 0.8167 |
+| benchmark/fgsm_auc | 0.8032 |
 | benchmark/random_degradation | 0.0000 |
-| benchmark/fgsm_degradation | 0.0162 |
-| benchmark/eager_p50_ms | 11.3774 |
-| benchmark/eager_p95_ms | 45.9450 |
-| benchmark/eager_p99_ms | 53.0627 |
-| benchmark/torchscript_p50_ms | 3.8520 |
-| benchmark/torchscript_p95_ms | 6.1546 |
-| benchmark/torchscript_p99_ms | 7.3145 |
-| benchmark/torchscript_throughput_rps | 255.1828 |
+| benchmark/fgsm_degradation | 0.0135 |
+| benchmark/eager_p50_ms | 6.9719 |
+| benchmark/eager_p95_ms | 10.5880 |
+| benchmark/eager_p99_ms | 25.1241 |
+| benchmark/torchscript_p50_ms | 4.2061 |
+| benchmark/torchscript_p95_ms | 7.1361 |
+| benchmark/torchscript_p99_ms | 14.4487 |
+| benchmark/torchscript_throughput_rps | 202.1621 |
 | benchmark/torchscript_parity_max_diff | 0.0000 |
+
+## Architectural Ablation Study
+
+| Architectural Variant | ROC-AUC | PR-AUC | Brier Score | ECE |
+| :--- | :---: | :---: | :---: | :---: |
+| 1. Static Tabular + DCNv2 Only | 0.5121 | 0.1530 | 0.2171 | 0.3262 |
+| 2. MMTT + PLR + DCNv2 | 0.8194 | 0.3827 | 0.1482 | 0.1563 |
+| 3. MMTT + RelBench Bipartite GNN + DCNv2 | 0.8140 | 0.3779 | 0.1723 | 0.1869 |
+| 4. Full LDM (MMTT + GNN + TabR + DCNv2) | 0.8167 | 0.3100 | 0.1860 | 0.1951 |
+| 5. In-Context PFN Head (Cold-Start ICL) | 0.8005 | 0.2623 | 0.1810 | 0.1955 |
 
 ---
 

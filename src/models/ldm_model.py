@@ -384,44 +384,47 @@ class LargeDataModel(nn.Module):
         support_labels: torch.Tensor,
         query_padding_mask: Optional[torch.Tensor] = None,
         support_padding_mask: Optional[torch.Tensor] = None,
+        detach_backbone: bool = False,
     ) -> torch.Tensor:
         """
         Performs TabPFN-style In-Context Learning (ICL) classification over
         encoded MMTT + Static Tabular representations in a single forward pass.
-
-        Args:
-            query_keys: Query MCC tokens `[N_q, S_q]`.
-            query_values: Query transaction amounts `[N_q, S_q]`.
-            query_times: Query time deltas `[N_q, S_q]`.
-            query_tabular: Query normalized static tabular features `[N_q, T]`.
-            support_keys: Support MCC tokens `[N_s, S_s]`.
-            support_values: Support transaction amounts `[N_s, S_s]`.
-            support_times: Support time deltas `[N_s, S_s]`.
-            support_tabular: Support normalized static tabular features `[N_s, T]`.
-            support_labels: Support binary fraud labels `[N_s]` or `[N_s, 1]`.
-            query_padding_mask: Optional boolean mask `[N_q, S_q]`.
-            support_padding_mask: Optional boolean mask `[N_s, S_s]`.
-
-        Returns:
-            Posterior classification logits `[N_q, 1]` for the query instances.
         """
-        q_emb = self.get_enriched_representation(
-            packed_keys=query_keys,
-            packed_values=query_values,
-            packed_times=query_times,
-            key_padding_mask=query_padding_mask,
-            update_memory=False,
-        )
-        s_emb = self.get_enriched_representation(
-            packed_keys=support_keys,
-            packed_values=support_values,
-            packed_times=support_times,
-            key_padding_mask=support_padding_mask,
-            update_memory=False,
-        )
-
-        q_joint = torch.cat([q_emb, query_tabular], dim=-1)
-        s_joint = torch.cat([s_emb, support_tabular], dim=-1)
+        if detach_backbone:
+            with torch.no_grad():
+                q_emb = self.get_enriched_representation(
+                    packed_keys=query_keys,
+                    packed_values=query_values,
+                    packed_times=query_times,
+                    key_padding_mask=query_padding_mask,
+                    update_memory=False,
+                )
+                s_emb = self.get_enriched_representation(
+                    packed_keys=support_keys,
+                    packed_values=support_values,
+                    packed_times=support_times,
+                    key_padding_mask=support_padding_mask,
+                    update_memory=False,
+                )
+            q_joint = torch.cat([q_emb.detach(), query_tabular.detach()], dim=-1)
+            s_joint = torch.cat([s_emb.detach(), support_tabular.detach()], dim=-1)
+        else:
+            q_emb = self.get_enriched_representation(
+                packed_keys=query_keys,
+                packed_values=query_values,
+                packed_times=query_times,
+                key_padding_mask=query_padding_mask,
+                update_memory=False,
+            )
+            s_emb = self.get_enriched_representation(
+                packed_keys=support_keys,
+                packed_values=support_values,
+                packed_times=support_times,
+                key_padding_mask=support_padding_mask,
+                update_memory=False,
+            )
+            q_joint = torch.cat([q_emb, query_tabular], dim=-1)
+            s_joint = torch.cat([s_emb, support_tabular], dim=-1)
 
         return self.pfn_head(
             query_features=q_joint,
