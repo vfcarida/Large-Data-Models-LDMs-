@@ -1,60 +1,65 @@
 # =============================================================================
-# DEFAULT CONFIGURATION (PRODUCTION / LARGE GPU)
+# DEFAULT CONFIGURATION (PRODUCTION / GPU)
 # =============================================================================
-# Usa um modelo de tamanho razoável e muitas épocas.
-# Ideal para um servidor GPU ou cloud.
+# Production-scale MMTT Transformer + DCNv2 configuration for full pre-training
+# and supervised fraud/risk fine-tuning.
 # =============================================================================
 _config_name: "default"
 
 # -----------------------------------------------------------------------------
-# Data & Generation
+# Data & Synthetic Prior Generation
 # -----------------------------------------------------------------------------
 data_path: "data/synthetic_transactions.parquet"
-num_users: 2500              # Mais usuários = melhor pré-treino
+num_users: 2500              # Total distinct customer accounts
 min_transactions: 30
 max_transactions: 300
-fraud_rate: 0.015            # Fraude é rara no mundo real (1.5%)
-batch_size: 128
+fraud_rate: 0.02             # Realistic imbalanced fraud prevalence (2.0%)
+batch_size: 64
 max_seq_len: 256
-num_workers: 4               # Processos paralelos de I/O
+num_workers: 0               # Cross-platform deterministic DataLoader execution
 use_cudf: false
 
 # -----------------------------------------------------------------------------
-# Model Architecture (MMTT + DCNv2)
+# Model Architecture (MMTT Transformer + Periodic Numerical + DCNv2)
 # -----------------------------------------------------------------------------
-vocab_size: 20               # Será sobrescrito automaticamente pelo data_module
-hidden_size: 256             # Dimensão do embedding do Transformer
-num_layers: 6                # Profundidade do Transformer
-num_heads: 8                 # Cabeças de atenção (hidden_size deve ser divisível por num_heads)
+vocab_size: 20               # Automatically synchronized with LDMDataModule
+hidden_size: 128             # Transformer hidden dimension (d_model)
+num_layers: 4                # Pre-Norm Transformer encoder depth
+num_heads: 4                 # Multi-head self-attention heads
 dropout: 0.1
-tabular_feature_size: 3      # Bureau score, age, income
-dcn_layers: 4                # Cross network depth (grau polinomial = 5)
+tabular_feature_size: 3      # Credit bureau score, annual income, age
+dcn_layers: 3                # DCNv2 polynomial cross depth (degree = 4)
 use_virtual_tokens: true
 num_virtual_tokens: 2
 pooling: "mean"
 
 # -----------------------------------------------------------------------------
-# Phase 1: Pre-training (LimiX)
+# Phase 1: Self-Supervised Pre-Training (LimiX + PRAGMA + CoLES)
 # -----------------------------------------------------------------------------
-pretrain_epochs: 15
-pretrain_lr: 5e-4            # Taxa de aprendizado base (AdamW)
-ssl_masking_prob: 0.20       # 20% de tokens mascarados no joint-distribution
+pretrain_epochs: 10
+pretrain_lr: 0.001           # Peak learning rate for AdamW
+ssl_masking_prob: 0.20       # Base masking probability for heterogeneous schedule
+ssl_temperature: 0.15        # CoLES contrastive temperature
 
 # -----------------------------------------------------------------------------
-# Phase 2: Fine-Tuning (Fraud Classification)
+# Phase 2: Supervised Fine-Tuning (Fraud Classification)
 # -----------------------------------------------------------------------------
-finetune_epochs: 20
-finetune_lr: 3e-4            # Menor que o pretrain para não esquecer os pesos base
-pos_weight: 15.0             # Multiplicador da loss para a classe minoritária (Fraude)
-metric_threshold: 0.4        # Threshold de F1 (0.4 foca mais em Recall do que 0.5)
+finetune_epochs: 15
+finetune_lr: 0.001           # Head learning rate (encoder uses 0.25x differential LR)
+pos_weight: 8.0              # Positive class weight for imbalanced BCEWithLogitsLoss
+metric_threshold: 0.5        # Operating probability threshold for F1/Precision/Recall
 
 # -----------------------------------------------------------------------------
-# Optimizers & Scheduler
+# Evaluation & Governance (SR 11-7 / Gartner AI TRiSM)
 # -----------------------------------------------------------------------------
-weight_decay: 0.01           # Regularização L2 acoplada no AdamW
-warmup_steps: 200            # Passos lineares antes do cosseno decair
+conformal_alpha: 0.10        # Conformal risk abstention miscoverage tolerance
+enable_strategic_shift: true # Run Gaussian drift and FGSM adversarial stress tests
+noise_std: 0.10
+adversarial_epsilon: 0.05
 
 # -----------------------------------------------------------------------------
-# Reproducibility
+# Optimizer & Reproducibility
 # -----------------------------------------------------------------------------
+weight_decay: 0.01
+warmup_steps: 50
 seed: 42

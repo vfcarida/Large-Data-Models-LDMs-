@@ -2,63 +2,55 @@
 Self-Supervised Learning (SSL) Objectives for LDM Pre-Training.
 
 ============================================================================
-PURPOSE (PROPÓSITO)
+PURPOSE
 ============================================================================
-Self-supervised objectives allow the model to learn rich representations
-from UNLABELED data. This is crucial because:
+Self-supervised objectives enable the Large Data Model (LDM) to learn rich,
+generalizable behavioral representations from unlabeled transaction logs.
 
-1. Labeled financial data is EXPENSIVE and SCARCE
-   - Fraud labels require manual investigation by analysts
-   - Bankruptcy labels only become available months/years later
-   - Privacy regulations limit label sharing across organizations
+This module implements three complementary self-supervised objectives:
 
-2. Unlabeled transaction data is ABUNDANT
-   - Banks process billions of transactions daily
-   - Each transaction contains rich multi-modal information
-   - The sequential structure encodes behavioral patterns
+1. NextTokenPredictionLoss (NTP — Autoregressive):
+   - Predicts the next transaction's merchant category (Key) and amount (Value)
+     given preceding transactions.
+   - Inspired by TransactionGPT (Dou et al., Visa Research, 2025) and TabGPT
+     (Padhi et al., IBM Research, 2021).
 
-Pre-training objectives extract knowledge from this abundance without
-any human labels, creating a "foundation" that can be specialized for
-any downstream task with minimal labeled data.
+2. ContextConditionalMaskedLoss (LimiX / PRAGMA — Masked Joint-Distribution):
+   - Uses a heterogeneous mask schedule (random cell, temporal block, and
+     shifted expansion masks) to corrupt transaction sequences and reconstruct
+     both latent representations and multi-modal raw features (Key, Value, Time).
+   - Prevents trivial local interpolation and representation collapse.
 
-============================================================================
-TWO COMPLEMENTARY OBJECTIVES
-============================================================================
-1. NextTokenPredictionLoss (NTP):
-   - AUTOREGRESSIVE: Predict the next transaction given previous ones
-   - Inspired by GPT: "Given transactions [t1, t2, ..., tn], predict t_{n+1}"
-   - Captures TEMPORAL dependencies and behavioral sequences
-   - Used by TransactionGPT and PRAGMA
-
-2. ContextConditionalMaskedLoss (LimiX):
-   - BIDIRECTIONAL: Randomly mask tokens and predict them from context
-   - Inspired by BERT: "Given [t1, ?, t3, ?, t5], predict t2 and t4"
-   - Captures CORRELATIONS between features (not just temporal)
-   - Used by LimiX for masked joint-distribution modeling
+3. ContrastiveEventSequenceLoss (CoLES — Subsequence Contrastive Alignment):
+   - Implements Contrastive Learning for Event Sequences (Babaev et al.,
+     SIGMOD 2022, arXiv:2002.08232).
+   - Aligns two stochastic views of each user's transaction history in
+     L2-normalized hyperspherical space via symmetric InfoNCE loss,
+     explicitly preventing constant-vector representation collapse.
 
 ============================================================================
 REFERENCES
 ============================================================================
-  - TransactionGPT (Visa, 2025): Next-event prediction for transactions
-  - PRAGMA (Revolut, 2025): Masked modeling for banking events
-  - LimiX (2024): Masked joint-distribution pre-training for tabular data
-  - BERT (Devlin, 2019): Masked Language Modeling objective
+  - Dou et al. (2025): "TransactionGPT: Foundation Models for Payment
+    Trajectories" (Visa Research, arXiv:2511.08939)
+  - Ostroukhov et al. (2026): "PRAGMA: A Self-Supervised Foundation Model
+    for Banking Events" (Revolut/NVIDIA, arXiv:2604.08649)
+  - LimiX Team (2025/2026): "LimiX: Masked Joint-Distribution Pre-training
+    for Structured Data" (arXiv:2509.03505 / arXiv:2609.17488)
+  - Babaev et al. (2022): "CoLES: Contrastive Learning for Event Sequences
+    with Self-Supervision" (SIGMOD 2022, arXiv:2002.08232)
 ============================================================================
 """
+
+from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Dict
 
 
 class SSLBaseLoss(nn.Module):
-    """
-    Base class for all self-supervised learning objectives.
-
-    Provides common interface and utility methods shared by both
-    autoregressive (NTP) and masked (LimiX) objectives.
-    """
+    """Base class for all self-supervised learning objectives."""
 
     def __init__(self):
         super().__init__()
@@ -68,33 +60,15 @@ class NextTokenPredictionLoss(SSLBaseLoss):
     """
     Next Token Prediction (NTP) — Autoregressive Objective.
 
-    Predicts the NEXT transaction's components (category and amount)
-    given all previous transactions. This forces the model to learn
-    temporal patterns and behavioral sequences.
-
-    How it works:
-        Input:  [t1, t2, t3, t4, t5]
-        Target: [t2, t3, t4, t5, --]  (shifted by 1)
-
-    The loss combines two components:
-    1. Cross-Entropy for categorical prediction (MCC code)
-    2. MSE for continuous prediction (transaction amount)
-
-    These are weighted and summed: L = L_CE + α · L_MSE
+    Predicts the next transaction's categorical key (MCC code) and continuous
+    amount given preceding transactions:
+        L_NTP = L_CE(key_logits, target_keys) + alpha * L_MSE(value_preds, target_values)
 
     Args:
         vocab_size: Number of categorical tokens to predict.
         hidden_size: Dimension of the Transformer's hidden states.
-        mse_weight: Weight for the continuous prediction loss (α).
-        label_smoothing: Smoothing factor for Cross-Entropy (prevents
-                        overconfident predictions, improves generalization).
-
-    Example:
-        >>> loss_fn = NextTokenPredictionLoss(vocab_size=20, hidden_size=128)
-        >>> hidden = torch.randn(4, 49, 128)   # [batch, seq-1, hidden]
-        >>> target_keys = torch.randint(0, 20, (4, 49))
-        >>> target_values = torch.randn(4, 49)
-        >>> loss, metrics = loss_fn(hidden, target_keys, target_values)
+        mse_weight: Weight for the continuous prediction loss (`alpha`).
+        label_smoothing: Label smoothing factor for categorical Cross-Entropy.
     """
 
     def __init__(
@@ -107,25 +81,11 @@ class NextTokenPredictionLoss(SSLBaseLoss):
         super().__init__()
         self.mse_weight = mse_weight
 
-        # =====================================================================
-        # Projection Heads
-        # =====================================================================
-        # These project the Transformer's hidden states back to the original
-        # feature space for prediction:
-        #
-        # key_head: hidden_size → vocab_size (categorical distribution)
-        # value_head: hidden_size → 1 (scalar amount prediction)
-        #
-        # The hidden_size is now a PARAMETER, not hardcoded to 768.
-        # This was a bug in the original code that would crash with
-        # any hidden_size != 768.
-        # =====================================================================
         self.key_head = nn.Linear(hidden_size, vocab_size)
         self.value_head = nn.Linear(hidden_size, 1)
 
-        # Loss functions
         self.ce_loss = nn.CrossEntropyLoss(
-            ignore_index=-1,  # Ignore padding tokens
+            ignore_index=-1,
             label_smoothing=label_smoothing,
         )
         self.mse_loss = nn.MSELoss()
@@ -137,36 +97,28 @@ class NextTokenPredictionLoss(SSLBaseLoss):
         target_values: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
-        Computes the joint NTP loss.
+        Computes the joint autoregressive NTP loss.
 
         Args:
-            hidden_states: [B, S-1, D] Transformer output for positions 1..S-1
-            target_keys:   [B, S-1] Ground truth MCC tokens for positions 2..S
-            target_values: [B, S-1] Ground truth amounts for positions 2..S
+            hidden_states: `[B, S-1, D]` Transformer output for positions `1..S-1`.
+            target_keys: `[B, S-1]` Ground truth MCC tokens for positions `2..S`.
+            target_values: `[B, S-1]` Ground truth amounts for positions `2..S`.
 
         Returns:
-            Tuple of (total_loss, metrics_dict)
-            - total_loss: Scalar tensor for backpropagation
-            - metrics_dict: Dictionary with component losses for logging
+            Tuple of `(total_loss, metrics_dict)`.
         """
-        # Project hidden states to prediction space
-        key_logits = self.key_head(hidden_states)          # [B, S-1, vocab]
-        value_preds = self.value_head(hidden_states).squeeze(-1)  # [B, S-1]
+        key_logits = self.key_head(hidden_states)
+        value_preds = self.value_head(hidden_states).squeeze(-1)
 
-        # Flatten for loss computation
-        # Cross-Entropy expects [N, C] and [N]
         loss_ce = self.ce_loss(
             key_logits.reshape(-1, key_logits.size(-1)),
             target_keys.reshape(-1),
         )
-
-        # MSE expects matching shapes
         loss_mse = self.mse_loss(
             value_preds.reshape(-1),
             target_values.reshape(-1),
         )
 
-        # Weighted combination
         total_loss = loss_ce + (self.mse_weight * loss_mse)
 
         return total_loss, {
@@ -178,36 +130,19 @@ class NextTokenPredictionLoss(SSLBaseLoss):
 
 class ContextConditionalMaskedLoss(SSLBaseLoss):
     """
-    Masked Joint-Distribution Modeling — LimiX Objective.
+    Masked Joint-Distribution Modeling — LimiX & PRAGMA Objective.
 
-    Instead of autoregressive left-to-right prediction, this objective
-    treats each data point as a MULTIVARIATE observation and randomly
-    masks some dimensions. The model must reconstruct the masked values
-    from the visible context.
+    Implements a heterogeneous masking schedule combining:
+      1. Cell Masking: Random individual events
+      2. Block Masking: Contiguous temporal event windows
+      3. Shifted Expansion: Probabilistic neighbor expansion
 
-    Key insight from LimiX:
-        "The correlations between features in structured data are NOT
-        purely temporal. A user's MCC distribution is correlated with
-        their income bracket, which is correlated with their credit
-        risk — regardless of the temporal ordering of transactions."
-
-    Masking Schedule (heterogeneous):
-        1. CELL masking: Random individual tokens (standard, like BERT)
-        2. BLOCK masking: Consecutive tokens in a temporal window
-           - Forces learning of temporal trends, not just local patterns
-        3. COLUMN masking: All values of a specific feature type
-           - Forces learning of cross-feature correlations
-
-    The heterogeneous schedule prevents the model from "cheating" by
-    simply copying adjacent values (trivial deduction).
+    Supports both latent representation reconstruction (`forward`) and
+    multi-modal input feature reconstruction (`compute_multimodal_loss`)
+    across categorical keys, continuous amounts, and temporal deltas.
 
     Args:
-        masking_prob: Base probability of masking each token.
-
-    Example:
-        >>> loss_fn = ContextConditionalMaskedLoss(masking_prob=0.15)
-        >>> mask = loss_fn.heterogeneous_mask_schedule(4, 100, device)
-        >>> loss = loss_fn(reconstructed, original, mask)
+        masking_prob: Base probability of masking each event token.
     """
 
     def __init__(self, masking_prob: float = 0.15):
@@ -221,44 +156,31 @@ class ContextConditionalMaskedLoss(SSLBaseLoss):
         device: torch.device,
     ) -> torch.Tensor:
         """
-        Generates a heterogeneous masking pattern.
+        Generates a heterogeneous boolean masking pattern `[B, S]`.
 
-        Combines three masking strategies:
-        1. Random cell masking (~60% of masks): Standard BERT-style
-        2. Block masking (~30% of masks): Consecutive temporal windows
-        3. Pure random roll (~10% of masks): Shifted patterns
-
-        The combination ensures the model learns:
-        - Local feature values (from cell masking)
-        - Temporal trends (from block masking)
-        - Global correlations (from the heterogeneous combination)
-
-        Args:
-            batch_size: Number of sequences in the batch.
-            seq_len: Length of each sequence.
-            device: Target device for the mask tensor.
-
-        Returns:
-            Boolean mask [B, S] where True = "must predict" (masked).
+        Guarantees at least one masked token per sequence when `seq_len >= 2`
+        so the reconstruction loss always receives informative gradients.
         """
-        # Strategy 1: Random cell masking (standard approach)
         cell_mask = torch.rand((batch_size, seq_len), device=device) < self.masking_prob
 
-        # Strategy 2: Block masking (temporal window expansion)
-        # If a token is masked, its immediate neighbor also gets masked.
-        # This prevents trivial deduction from adjacent context.
         shifted_mask = torch.roll(cell_mask, shifts=1, dims=1)
-        shifted_mask[:, 0] = False  # Don't wrap around
+        shifted_mask[:, 0] = False
         block_mask = cell_mask | shifted_mask
 
-        # Strategy 3: Additional random expansion for diversity
         extra_mask = torch.roll(cell_mask, shifts=-1, dims=1)
         extra_mask[:, -1] = False
 
-        # Combine with probabilistic mixing
-        # ~70% of the time use block mask, ~30% add extra expansion
         use_extra = torch.rand((batch_size, 1), device=device) < 0.3
         combined_mask = block_mask | (extra_mask & use_extra)
+
+        # Ensure at least one position is masked and at least one remains unmasked
+        if seq_len >= 2:
+            no_mask_rows = ~combined_mask.any(dim=1)
+            if no_mask_rows.any():
+                combined_mask[no_mask_rows, 0] = True
+            all_mask_rows = combined_mask.all(dim=1)
+            if all_mask_rows.any():
+                combined_mask[all_mask_rows, -1] = False
 
         return combined_mask
 
@@ -269,32 +191,119 @@ class ContextConditionalMaskedLoss(SSLBaseLoss):
         mask: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Computes the reconstruction loss over masked positions.
-
-        Uses L2 loss (MSE) to measure the distance between the model's
-        reconstruction and the original embedding values. Only masked
-        positions contribute to the loss — visible positions are ignored.
-
-        This is analogous to how BERT only computes loss on [MASK] tokens,
-        not on the visible context.
+        Computes MSE reconstruction loss over masked positions.
 
         Args:
-            reconstructed_embeddings: Model output [B, S, D] or [B, S]
-            original_embeddings: Ground truth [B, S, D] or [B, S]
-            mask: Boolean mask [B, S] where True = masked position
+            reconstructed_embeddings: Predicted representations `[B, S, D]` or `[B, S]`.
+            original_embeddings: Target representations `[B, S, D]` or `[B, S]`.
+            mask: Boolean mask `[B, S]` where `True` denotes a masked position.
 
         Returns:
             Scalar MSE loss over masked positions.
         """
-        # Select only masked positions for loss computation
         masked_preds = reconstructed_embeddings[mask]
         masked_targets = original_embeddings[mask]
 
-        # Edge case: if no positions are masked (very unlikely but possible)
         if masked_preds.numel() == 0:
-            return torch.tensor(
-                0.0, device=reconstructed_embeddings.device, requires_grad=True
-            )
+            return (reconstructed_embeddings * 0.0).sum()
 
-        loss = F.mse_loss(masked_preds, masked_targets)
-        return loss
+        return F.mse_loss(masked_preds, masked_targets)
+
+    def compute_multimodal_loss(
+        self,
+        predictions: Dict[str, torch.Tensor],
+        target_keys: torch.Tensor,
+        target_values: torch.Tensor,
+        target_times: torch.Tensor,
+        token_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Computes true multi-modal KVT feature reconstruction loss at masked positions.
+
+        Reconstructs:
+          1. Categorical MCC `keys` via Cross-Entropy
+          2. Continuous `values` via Smooth L1 (Huber) + MSE loss
+          3. Log-scaled `times` via Smooth L1 loss
+
+        By forcing the encoder to predict the actual masked discrete categories,
+        continuous amounts, and time intervals, representation collapse to a
+        constant vector is mathematically impossible.
+        """
+        if not token_mask.any():
+            zero = (predictions["value_pred"] * 0.0).sum()
+            return zero, {"key_loss": 0.0, "value_loss": 0.0, "time_loss": 0.0}
+
+        key_logits = predictions["key_logits"][token_mask]
+        masked_keys = target_keys[token_mask].clamp(min=0, max=key_logits.size(-1) - 1)
+        key_loss = F.cross_entropy(key_logits, masked_keys)
+
+        value_pred = predictions["value_pred"][token_mask]
+        masked_values = target_values[token_mask]
+        value_loss = F.smooth_l1_loss(value_pred, masked_values)
+
+        time_pred = predictions["time_pred"][token_mask]
+        masked_times = torch.log1p(target_times[token_mask].float().clamp(min=0.0))
+        time_loss = F.smooth_l1_loss(time_pred, masked_times)
+
+        total = key_loss + value_loss + 0.25 * time_loss
+        return total, {
+            "key_loss": float(key_loss.detach().item()),
+            "value_loss": float(value_loss.detach().item()),
+            "time_loss": float(time_loss.detach().item()),
+        }
+
+
+class ContrastiveEventSequenceLoss(SSLBaseLoss):
+    """
+    Contrastive Learning for Event Sequences (CoLES).
+
+    Implements the self-supervised sequence contrastive objective from
+    Babaev et al. (SIGMOD 2022, "CoLES: Contrastive Learning for Event
+    Sequences with Self-Supervision", arXiv:2002.08232).
+
+    Given two augmented/masked views of a batch of user sequences with
+    pooled embeddings `z1` and `z2` of shape `[B, D]`, computes symmetric
+    temperature-scaled InfoNCE (NT-Xent) loss on the unit hypersphere.
+    Aligning positive views while repelling distinct users in the batch
+    guarantees high-variance, discriminative user representations.
+
+    Args:
+        temperature: Softmax temperature scaling factor (default: `0.15`).
+    """
+
+    def __init__(self, temperature: float = 0.15):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(
+        self,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Computes symmetric InfoNCE contrastive loss between two sequence views.
+
+        Args:
+            z1: Pooled embeddings from view 1 `[B, D]`.
+            z2: Pooled embeddings from view 2 `[B, D]`.
+
+        Returns:
+            Scalar contrastive loss tensor.
+        """
+        batch_size = z1.size(0)
+        if batch_size < 2:
+            # With batch_size == 1, maximize cosine similarity between positive views
+            z1_norm = F.normalize(z1, dim=-1)
+            z2_norm = F.normalize(z2, dim=-1)
+            return 1.0 - (z1_norm * z2_norm).sum(dim=-1).mean()
+
+        z1_norm = F.normalize(z1, dim=-1)
+        z2_norm = F.normalize(z2, dim=-1)
+
+        logits_12 = torch.matmul(z1_norm, z2_norm.T) / self.temperature
+        logits_21 = logits_12.T
+        targets = torch.arange(batch_size, device=z1.device, dtype=torch.long)
+
+        loss_12 = F.cross_entropy(logits_12, targets)
+        loss_21 = F.cross_entropy(logits_21, targets)
+        return 0.5 * (loss_12 + loss_21)

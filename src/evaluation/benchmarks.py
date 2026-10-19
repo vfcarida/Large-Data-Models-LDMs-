@@ -1,48 +1,34 @@
 """
-Benchmark Suite for Formal LDM Evaluation.
+Benchmark Suite for Formal LDM Evaluation and Governance Auditing.
 
 ============================================================================
-PURPOSE (PROPÓSITO)
+PURPOSE
 ============================================================================
-This module runs the trained LDM through standardized evaluation protocols
-against the test set, computing comprehensive metrics and generating
-a formatted report.
-
-The benchmarks evaluate:
-1. Classification performance (AUC, F1, Precision, Recall)
-2. Model robustness under distribution shift (Random + FGSM)
-3. Imputation quality (from pre-training objective)
-
-============================================================================
-BENCHMARK DATASETS (Reference)
-============================================================================
-The following datasets are referenced in the LDM literature. While this
-module currently evaluates on our synthetic data, the metrics and protocols
-are designed to be directly comparable:
-
-1. V4FinBench: Corporate bankruptcy forecasting (extreme imbalance)
-2. OpenML-CC18: Zero-shot generalist tabular classification
-3. TabArena: Few-shot tabular task benchmark
-4. TALENT-REG: Tabular inference quality & interpretability
-5. Adult/BankMarketing: Strategic manipulation simulation
+Runs a trained Large Data Model (LDM) through standardized evaluation
+protocols covering:
+  1. Imbalanced Classification Discrimination (ROC-AUC, PR-AUC, F1, Recall@FPR)
+  2. Epistemic Calibration Auditing (Expected Calibration Error, Brier Score)
+  3. Conformal Risk Abstention (Selective Accuracy & Coverage)
+  4. Strategic & Natural Distribution Shift Resilience (Gaussian Drift & FGSM)
 
 ============================================================================
 REFERENCES
 ============================================================================
-  - TabArena: https://github.com/puhsu/tabular-dl-tabr
-  - OpenML-CC18: https://www.openml.org/s/99
-  - V4FinBench: Corporate bankruptcy forecasting benchmark
+  - RelBench (Robinson et al., NeurIPS 2024, arXiv:2407.20060)
+  - Federal Reserve SR 11-7 / SR 26-2 Model Risk Management Guidance
+  - Gartner AI TRiSM (AI Trust, Risk, and Security Management)
 ============================================================================
 """
 
+from pathlib import Path
+from typing import Any, Dict, Optional
+import json
+import logging
+
 import torch
 import torch.nn as nn
-from typing import Dict, Any, Optional
-from pathlib import Path
-import logging
-import json
 
-from src.evaluation.metrics import RiskMetricsEvaluator, calculate_auc, calculate_f1_flexible
+from src.evaluation.metrics import RiskMetricsEvaluator
 from src.evaluation.strategic_shift_tester import StrategicShiftTester
 
 logger = logging.getLogger(__name__)
@@ -50,18 +36,13 @@ logger = logging.getLogger(__name__)
 
 class BenchmarkSuite:
     """
-    Orchestrates formal evaluation of the LDM across multiple metrics.
-
-    Provides a standardized evaluation pipeline that:
-    1. Runs inference on the test set
-    2. Computes classification metrics
-    3. Tests robustness (optional)
-    4. Generates a formatted results dictionary
+    Orchestrates formal evaluation of the LDM across discrimination,
+    calibration, conformal abstention, and adversarial shift protocols.
 
     Args:
-        model: Trained LDM model (in eval mode).
+        model: Trained `LargeDataModel` instance.
         config: Configuration dictionary with evaluation parameters.
-        device: Device for inference ("cpu" or "cuda").
+        device: Target inference device (`"cpu"` or `"cuda"`).
     """
 
     def __init__(
@@ -70,70 +51,96 @@ class BenchmarkSuite:
         config: Dict[str, Any],
         device: str = "cpu",
     ):
-        self.model = model
+        self.model = model.to(device)
         self.config = config
         self.device = device
-        self.threshold = config.get("metric_threshold", 0.5)
+        self.threshold = float(config.get("metric_threshold", 0.5))
 
-        # Metrics evaluator
-        self.metrics_evaluator = RiskMetricsEvaluator(threshold=self.threshold)
+        self.metrics_evaluator = RiskMetricsEvaluator(
+            threshold=self.threshold,
+            conformal_alpha=float(config.get("conformal_alpha", 0.10)),
+        )
 
-        # Robustness tester (optional)
-        self.enable_robustness = config.get("enable_strategic_shift", False)
-        if self.enable_robustness:
-            self.shift_tester = StrategicShiftTester(
-                noise_std=config.get("noise_std", 0.1),
-                adversarial_epsilon=config.get("adversarial_epsilon", 0.05),
-            )
+        self.enable_robustness = bool(config.get("enable_strategic_shift", True))
+        self.shift_tester = StrategicShiftTester(
+            noise_std=float(config.get("noise_std", 0.1)),
+            adversarial_epsilon=float(config.get("adversarial_epsilon", 0.05)),
+        )
 
     def evaluate_classification(
         self,
         dataloader,
-    ) -> Dict[str, float]:
+        val_dataloader: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         """
-        Evaluates binary classification performance on the test set.
+        Evaluates classification, calibration, and conformal abstention on `dataloader`.
 
-        Iterates through the full test DataLoader, collecting all
-        predictions, then computes aggregate metrics.
-
-        Args:
-            dataloader: Test DataLoader with packed batches.
-
-        Returns:
-            Dictionary with AUC, F1, Precision, Recall, Accuracy.
+        If `val_dataloader` is provided, calibrates the `ConformalRiskAbstainer`
+        on validation predictions before evaluating on the test dataloader.
         """
-        logger.info("[Benchmark] Running classification evaluation...")
-
+        logger.info("[Benchmark] Running classification & calibration evaluation...")
         self.model.eval()
+
+        if val_dataloader is not None:
+            val_logits, val_labels = [], []
+            with torch.no_grad():
+                for batch in val_dataloader:
+                    keys = batch["packed_keys"].to(self.device)
+                    values = batch["packed_values"].to(self.device)
+                    times = batch["packed_times"].to(self.device)
+                    tabular = batch["tabular"].to(self.device)
+                    padding_mask = batch.get("key_padding_mask")
+                    if padding_mask is not None:
+                        padding_mask = padding_mask.to(self.device)
+                    logits = self.model(
+                        keys,
+                        values,
+                        times,
+                        tabular_features=tabular,
+                        key_padding_mask=padding_mask,
+                    )
+                    val_logits.append(logits.cpu())
+                    val_labels.append(batch["labels"].cpu())
+            if val_logits:
+                self.metrics_evaluator.abstainer.calibrate(
+                    torch.cat(val_logits, dim=0),
+                    torch.cat(val_labels, dim=0),
+                )
+
         all_logits = []
         all_labels = []
 
         with torch.no_grad():
             for batch in dataloader:
-                # Move batch to device
                 keys = batch["packed_keys"].to(self.device)
                 values = batch["packed_values"].to(self.device)
                 times = batch["packed_times"].to(self.device)
                 tabular = batch["tabular"].to(self.device)
+                padding_mask = batch.get("key_padding_mask")
+                if padding_mask is not None:
+                    padding_mask = padding_mask.to(self.device)
                 labels = batch["labels"]
 
-                # Forward pass
-                logits = self.model(keys, values, times, tabular_features=tabular)
+                logits = self.model(
+                    keys,
+                    values,
+                    times,
+                    tabular_features=tabular,
+                    key_padding_mask=padding_mask,
+                )
 
                 all_logits.append(logits.cpu())
                 all_labels.append(labels.cpu())
 
-        # Aggregate predictions
-        all_logits = torch.cat(all_logits, dim=0)
-        all_labels = torch.cat(all_labels, dim=0)
+        all_logits_tensor = torch.cat(all_logits, dim=0)
+        all_labels_tensor = torch.cat(all_labels, dim=0)
 
-        # Compute all metrics
-        results = self.metrics_evaluator.evaluate(all_logits, all_labels)
+        results = self.metrics_evaluator.evaluate(all_logits_tensor, all_labels_tensor)
 
         logger.info(
             f"[Benchmark] Classification results: "
-            f"AUC={results['auc']:.4f}, F1={results['f1_score']:.4f}, "
-            f"Precision={results['precision']:.4f}, Recall={results['recall']:.4f}"
+            f"ROC-AUC={results['auc']:.4f}, PR-AUC={results['pr_auc']:.4f}, "
+            f"F1={results['f1_score']:.4f}, ECE={results['ece']:.4f}"
         )
 
         return results
@@ -143,88 +150,120 @@ class BenchmarkSuite:
         dataloader,
     ) -> Dict[str, float]:
         """
-        Evaluates model robustness under distribution shift.
-
-        Tests the model against:
-        1. Random Gaussian noise (natural drift)
-        2. FGSM adversarial perturbation (strategic manipulation)
-
-        Args:
-            dataloader: Test DataLoader.
-
-        Returns:
-            Dictionary with clean, shifted, and adversarial metrics.
+        Evaluates model robustness under random Gaussian drift and FGSM evasion.
         """
         if not self.enable_robustness:
             logger.info("[Benchmark] Robustness testing disabled in config.")
             return {}
 
-        logger.info("[Benchmark] Running robustness evaluation...")
+        logger.info("[Benchmark] Running robustness evaluation across test batches...")
+        self.model.eval()
 
-        # Get first batch for robustness testing
-        batch = next(iter(dataloader))
-        keys = batch["packed_keys"].to(self.device)
-        values = batch["packed_values"].to(self.device)
-        times = batch["packed_times"].to(self.device)
-        tabular = batch["tabular"].to(self.device)
-        labels = batch["labels"].to(self.device)
+        clean_logits_list = []
+        shifted_logits_list = []
+        adv_logits_list = []
+        labels_list = []
 
-        results = self.shift_tester.evaluate_robustness(
-            self.model,
-            (keys, values, times),
-            labels,
-            tabular=tabular,
-        )
+        for batch in dataloader:
+            keys = batch["packed_keys"].to(self.device)
+            values = batch["packed_values"].to(self.device)
+            times = batch["packed_times"].to(self.device)
+            tabular = batch["tabular"].to(self.device)
+            padding_mask = batch.get("key_padding_mask")
+            if padding_mask is not None:
+                padding_mask = padding_mask.to(self.device)
+            labels = batch["labels"].to(self.device)
 
-        return results
+            with torch.no_grad():
+                clean_logits = self.model(
+                    keys,
+                    values,
+                    times,
+                    tabular_features=tabular,
+                    key_padding_mask=padding_mask,
+                )
+                shifted_vals = self.shift_tester.apply_random_shift(values)
+                if padding_mask is not None:
+                    shifted_vals = shifted_vals.masked_fill(padding_mask, 0.0)
+                shifted_logits = self.model(
+                    keys,
+                    shifted_vals,
+                    times,
+                    tabular_features=tabular,
+                    key_padding_mask=padding_mask,
+                )
+
+            adv_inputs = self.shift_tester.apply_gradient_adversarial_shift(
+                self.model,
+                (keys, values, times),
+                labels,
+                tabular=tabular,
+                key_padding_mask=padding_mask,
+            )
+            with torch.no_grad():
+                adv_logits = self.model(
+                    adv_inputs[0],
+                    adv_inputs[1],
+                    adv_inputs[2],
+                    tabular_features=tabular,
+                    key_padding_mask=padding_mask,
+                )
+
+            clean_logits_list.append(clean_logits.cpu())
+            shifted_logits_list.append(shifted_logits.cpu())
+            adv_logits_list.append(adv_logits.cpu())
+            labels_list.append(labels.cpu())
+
+        from src.evaluation.metrics import calculate_auc
+
+        all_clean = torch.cat(clean_logits_list, dim=0)
+        all_shifted = torch.cat(shifted_logits_list, dim=0)
+        all_adv = torch.cat(adv_logits_list, dim=0)
+        all_labels = torch.cat(labels_list, dim=0)
+
+        clean_auc = calculate_auc(all_clean, all_labels)
+        shifted_auc = calculate_auc(all_shifted, all_labels)
+        adv_auc = calculate_auc(all_adv, all_labels)
+
+        return {
+            "clean_auc": float(clean_auc),
+            "random_shift_auc": float(shifted_auc),
+            "fgsm_auc": float(adv_auc),
+            "random_degradation": float(clean_auc - shifted_auc),
+            "fgsm_degradation": float(clean_auc - adv_auc),
+        }
 
     def run_all(
         self,
         dataloader,
-    ) -> Dict[str, float]:
-        """
-        Runs the complete benchmark suite.
-
-        Args:
-            dataloader: Test DataLoader.
-
-        Returns:
-            Comprehensive results dictionary.
-        """
+        val_dataloader: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Runs the complete classification, calibration, and robustness suite."""
         logger.info("=" * 60)
         logger.info("[Benchmark] Starting full evaluation suite")
         logger.info("=" * 60)
 
-        results = {}
+        results: Dict[str, Any] = {}
+        results.update(self.evaluate_classification(dataloader, val_dataloader=val_dataloader))
 
-        # Classification metrics
-        classification_results = self.evaluate_classification(dataloader)
-        results.update(classification_results)
-
-        # Robustness metrics (if enabled)
         if self.enable_robustness:
-            robustness_results = self.evaluate_robustness(dataloader)
-            results.update(robustness_results)
+            results.update(self.evaluate_robustness(dataloader))
 
         logger.info("[Benchmark] Full suite completed.")
         return results
 
     def save_results(
         self,
-        results: Dict[str, float],
+        results: Dict[str, Any],
         output_path: str,
-    ):
+    ) -> None:
         """Saves benchmark results to a JSON file."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         logger.info(f"[Benchmark] Results saved to {path}")
 
 
-# =============================================================================
-# Standalone execution
-# =============================================================================
 if __name__ == "__main__":
-    print("[Benchmark] To run benchmarks, use: python src/main.py")
-    print("[Benchmark] The main.py pipeline handles data, training, and evaluation.")
+    print("[Benchmark] To run benchmarks, execute: python src/main.py")

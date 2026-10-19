@@ -1,46 +1,44 @@
-# 5. Avaliação e Robustez Estratégica
+# 5. Calibrated Risk Evaluation, Conformal Abstention & Strategic Robustness
 
-Treinar um modelo é fácil; garantir que ele gere valor real sem quebrar em produção é a parte difícil. Este módulo explica as ferramentas encontradas em `src/evaluation/`.
+Deploying a foundation model in regulated financial workflows requires moving beyond raw accuracy or single-threshold metrics. In alignment with **Federal Reserve / OCC SR 11-7 & SR 26-2 Model Risk Management** and **Gartner AI TRiSM**, [`src/evaluation/`](../src/evaluation/) implements a four-pillar evaluation and governance harness.
 
-## Métricas para Classes Extremamente Desbalanceadas
+---
 
-No arquivo `metrics.py`, banimos o uso de "Acurácia Simples". Utilizamos:
+## Pillar 1: Imbalanced Discrimination Metrics (`src/evaluation/metrics.py`)
 
-### AUC (Area Under the ROC Curve)
-Mede a capacidade geral do modelo de separar fraudadores de clientes bons, independente de qual limiar (corte) escolhamos.
-*   0.5: O modelo está adivinhando aleatoriamente.
-*   0.8+: Bom modelo.
-*   1.0: Perfeito (suspeite de vazamento de dados).
+Under severe class imbalance ($1\%$–$5\%$ fraud prevalence), a trivial classifier that predicts "legitimate" on every transaction achieves $95\%$–$99\%$ accuracy while catching zero fraud. We enforce four complementary discrimination metrics:
 
-### F1-Score com Limiar Flexível (Flexible Threshold)
-O F1-Score é a média harmônica entre **Precision** e **Recall**.
-*   **Precision (Precisão)**: "Dos alertas que o modelo gerou, quantos eram realmente fraude?" (Evita irritar clientes com falsos positivos).
-*   **Recall (Revocação)**: "De todas as fraudes reais, quantas nós pegamos?" (Evita perder dinheiro).
+1. **ROC-AUC (`calculate_auc`):** Threshold-independent rank concordance across all positive-negative pairs.
+2. **PR-AUC / Average Precision (`calculate_pr_auc`):** Area under the Precision-Recall curve. As demonstrated by Saito & Rehmsmeier (*PLOS ONE*, 2015), PR-AUC is significantly more informative than ROC-AUC under severe imbalance because it directly reflects false-positive alert inflation.
+3. **Recall at Fixed False Positive Rate (`calculate_recall_at_fpr`):** Measures the fraction of total fraud captured when the false-positive rate is capped at an operational budget (e.g., `max_fpr = 0.05` or `0.01`), matching enterprise fraud operations KPIs (BCG / McKinsey).
+4. **Flexible-Threshold F1, Precision, Recall & Specificity (`calculate_f1_flexible`, `calculate_precision_recall`):** Evaluates operating-point performance under business-tuned decision thresholds.
 
-Fornecemos um `threshold` flexível. Um limiar de 0.3 prioriza pegar mais fraudes (alto recall), enquanto 0.8 prioriza não bloquear clientes bons (alta precisão).
+---
 
-## Robustez e "Strategic Shift" (Manipulação Estratégica)
+## Pillar 2: Epistemic Calibration Auditing
 
-Diferente de identificar fotos de cães e gatos, no mundo financeiro, os fraudadores mudam ativamente seu comportamento para escapar dos modelos. Isso é testado em `strategic_shift_tester.py`.
+In credit underwriting and transaction scoring, predicted probabilities $\hat{p}_i = \sigma(\text{logit}_i)$ are consumed downstream by expected-loss calculators (`EL = PD * LGD * EAD`). Uncalibrated probabilities distort capital allocation. We audit calibration via:
 
-Nós rodamos três simulações:
+* **Brier Score (`calculate_brier_score`):** Mean squared probability error $\frac{1}{N}\sum_{i=1}^N (\hat{p}_i - y_i)^2$.
+* **Expected Calibration Error (`calculate_ece`):** Partitions predictions into $M$ confidence bins and measures the weighted gap between empirical positive rates and mean predicted probabilities (Guo et al., *ICML* 2017).
 
-### 1. Desempenho Limpo (Baseline)
-Como o modelo atua com os dados originais.
+---
 
-### 2. Random Shift (Ruído Natural)
-Adicionamos ruído Gaussiano aos valores das transações. Isso simula o envelhecimento natural do modelo devido a inflação ou novas tendências de mercado. O modelo não deve quebrar com pequenas flutuações.
+## Pillar 3: Split-Conformal Risk Abstention (`ConformalRiskAbstainer`)
 
-### 3. FGSM (Ataque Adversarial de Caixa Branca)
-Usamos o *Fast Gradient Sign Method*. Nós computamos o gradiente do modelo em relação aos DADOS de entrada (e não aos pesos), e empurramos os valores na exata direção que maximiza o erro do modelo.
-Isso simula o fraudador "perfeito", que sabe exatamente como contornar os filtros.
+Even a well-calibrated model encounters ambiguous out-of-distribution trajectories where automated approval or rejection carries unacceptable risk. Following **Conformal Prediction** (Angelopoulos & Bates, 2023) and **Gartner AI TRiSM** runtime enforcement, `ConformalRiskAbstainer` calibrates class-conditional finite-sample probability quantiles $[q_{\text{low}}, q_{\text{high}}]$ at significance level $\alpha$:
 
-Se a Degradação de AUC for menor que 5% sob o FGSM, nosso modelo aprendeu a estrutura profunda do usuário (comportamento base), em vez de apenas decorar valores anômalos rasos.
+$$\text{Decision}(\hat{p}_i) = \begin{cases} 0 \text{ (Auto-Approve)} & \text{if } \hat{p}_i \le q_{\text{low}} \\ 1 \text{ (Auto-Block)} & \text{if } \hat{p}_i \ge q_{\text{high}} \\ -1 \text{ (Abstain }\rightarrow\text{ Analyst Review)} & \text{if } \hat{p}_i \in (q_{\text{low}}, q_{\text{high}}) \end{cases}$$
 
-## LoRA: Adaptação de Emergência
+`RiskMetricsEvaluator` reports `conformal_coverage`, `conformal_abstention_rate`, `conformal_selective_accuracy`, and `conformal_selective_f1` on the automated subset.
 
-Quando uma nova onda de fraude ataca e os padrões mudam bruscamente, nós não temos tempo (e às vezes recurso computacional) para re-treinar todo o LDM do zero.
+---
 
-É aqui que entra o método `inject_lora_adaptation()`.
-O LoRA (Low-Rank Adaptation) congela as matrizes gigantescas do Transformer original, e insere matrizes bem menores ao lado. O modelo treina apenas esses pequenos "remendos", que representam ~1% dos parâmetros originais.
-Isso permite fine-tuning imediato (em horas ou minutos) em reposta a ataques, mantendo a inteligência pré-treinada intacta.
+## Pillar 4: Strategic Shift & Adversarial Stress Testing (`strategic_shift_tester.py`)
+
+Unlike static computer vision tasks, financial fraud involves adaptive adversaries who intentionally manipulate transaction amounts (e.g., smurfing/structuring) to evade detection thresholds. `StrategicShiftTester` evaluates model degradation under two regimes:
+
+1. **Natural Distribution Drift (`apply_random_shift`):** Injects Gaussian noise $\epsilon \sim \mathcal{N}(0, \sigma^2)$ into continuous transaction amounts to simulate inflation or seasonal spending shifts.
+2. **White-Box FGSM Evasion (`apply_gradient_adversarial_shift`):** Computes the gradient of the classification loss with respect to the input transaction values and perturbs non-padded amounts in the worst-case direction (Goodfellow et al., *ICLR* 2015):
+   $$\mathbf{v}_{\text{adv}} = \mathbf{v} + \epsilon \cdot \text{sign}\!\left(\nabla_{\mathbf{v}} \mathcal{L}_{\text{BCE}}(f_\theta(\mathbf{k}, \mathbf{v}, \mathbf{t}), y)\right)$$
+3. **Rapid Emergency Adaptation via LoRA (`inject_lora_adaptation`):** When novel attack patterns emerge in production, Low-Rank Adaptation (Hu et al., *ICLR* 2022) freezes the pre-trained backbone and injects low-rank matrices ($\sim 1\%$ trainable parameters) into attention projections for rapid hot-fix fine-tuning without catastrophic forgetting.

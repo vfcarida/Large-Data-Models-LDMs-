@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ldm-research-lab"
+version = "0.2.0"
+description = "Large Data Models (LDMs) — Self-Supervised Foundation Models for Multi-Modal-Temporal-Tabular (MMTT) Financial Sequences and Calibrated Risk Classification"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Vinicius Caridá", email = "vfcarida@gmail.com" }
+]
+maintainers = [
+    { name = "Vinicius Caridá", email = "vfcarida@gmail.com" }
+]
+keywords = [
+    "large-data-models",
+    "tabular-foundation-models",
+    "transaction-sequences",
+    "self-supervised-learning",
+    "fraud-detection",
+    "dcnv2",
+    "conformal-prediction",
+    "pytorch-lightning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.1.0",
+    "pytorch-lightning>=2.1.0",
+    "torchmetrics>=1.2.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+    "scikit-learn>=1.3.0",
+    "hydra-core>=1.3.2",
+    "omegaconf>=2.3.0",
+    "pyyaml>=6.0",
+    "rich>=13.0.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+tracking = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
+viz = ["matplotlib>=3.8.0", "seaborn>=0.13.0"]
+peft = ["peft>=0.7.0", "transformers>=4.36.0", "accelerate>=0.25.0"]
+gpu = ["cudf-cu12"]
+dev = ["pytest>=7.4.0", "hypothesis>=6.90.0", "ruff>=0.3.0", "mypy>=1.8.0"]
+
+[project.urls]
+Homepage = "https://github.com/vfcarida/Large-Data-Models-LDMs-"
+Repository = "https://github.com/vfcarida/Large-Data-Models-LDMs-.git"
+Issues = "https://github.com/vfcarida/Large-Data-Models-LDMs-/issues"
+
+[project.scripts]
+ldm-pipeline = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true

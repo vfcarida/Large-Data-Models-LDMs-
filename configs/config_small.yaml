@@ -1,61 +1,65 @@
 # =============================================================================
-# SMALL CONFIGURATION (CPU / FAST TESTING)
+# SMALL CONFIGURATION (CPU / FAST VERIFICATION)
 # =============================================================================
-# Usa um modelo minúsculo e poucos dados.
-# Projetado para rodar em CPU local em 1-2 minutos para fins de teste
-# (sanity check do código).
+# Compact MMTT + DCNv2 configuration designed to execute end-to-end on CPU in
+# under 60 seconds for deterministic verification and CI benchmarking.
 # =============================================================================
 _config_name: "small"
 
 # -----------------------------------------------------------------------------
-# Data & Generation
+# Data & Synthetic Prior Generation
 # -----------------------------------------------------------------------------
 data_path: "data/synthetic_small.parquet"
-num_users: 200               # Muito poucos usuários, gera rápido
-min_transactions: 10
+num_users: 400               # 400 users (280 train / 60 val / 60 test) for fast CPU verification
+min_transactions: 12
 max_transactions: 50
-fraud_rate: 0.05             # Taxa mais alta para garantir que apareça fraude no mini-batch
-batch_size: 16               # Batch pequeno = pouca RAM
+fraud_rate: 0.12             # 12% positive rate ensures ~7 fraud users per validation/test split
+batch_size: 16
 max_seq_len: 64
-num_workers: 0               # 0 evita overhead de multiprocessing no Windows
+num_workers: 0               # Zero multiprocessing overhead on Windows/CI
 use_cudf: false
 
 # -----------------------------------------------------------------------------
-# Model Architecture (MMTT + DCNv2)
+# Model Architecture (MMTT Transformer + Periodic Numerical + DCNv2)
 # -----------------------------------------------------------------------------
 vocab_size: 20
-hidden_size: 64              # Modelo muito raso e pequeno
+hidden_size: 64
 num_layers: 2
 num_heads: 2
 dropout: 0.1
 tabular_feature_size: 3
 dcn_layers: 2
 use_virtual_tokens: true
-num_virtual_tokens: 1
+num_virtual_tokens: 2
 pooling: "mean"
 
 # -----------------------------------------------------------------------------
-# Phase 1: Pre-training (LimiX)
+# Phase 1: Self-Supervised Pre-Training (LimiX + PRAGMA + CoLES)
 # -----------------------------------------------------------------------------
-pretrain_epochs: 3           # Apenas para ver se as loss caem sem erro
-pretrain_lr: 1e-3
+pretrain_epochs: 3
+pretrain_lr: 0.001
 ssl_masking_prob: 0.15
+ssl_temperature: 0.15
 
 # -----------------------------------------------------------------------------
-# Phase 2: Fine-Tuning (Fraud Classification)
+# Phase 2: Supervised Fine-Tuning (Fraud Classification)
 # -----------------------------------------------------------------------------
-finetune_epochs: 5
-finetune_lr: 1e-3
-pos_weight: 5.0
+finetune_epochs: 8
+finetune_lr: 0.002
+pos_weight: 4.0
 metric_threshold: 0.5
 
 # -----------------------------------------------------------------------------
-# Optimizers & Scheduler
+# Evaluation & Governance (SR 11-7 / Gartner AI TRiSM)
 # -----------------------------------------------------------------------------
-weight_decay: 0.01
-warmup_steps: 20
+conformal_alpha: 0.10
+enable_strategic_shift: true
+noise_std: 0.10
+adversarial_epsilon: 0.05
 
 # -----------------------------------------------------------------------------
-# Reproducibility
+# Optimizer & Reproducibility
 # -----------------------------------------------------------------------------
+weight_decay: 0.01
+warmup_steps: 10
 seed: 42

@@ -2,7 +2,7 @@
 Learning Rate Scheduler — Warmup + Cosine Annealing.
 
 ============================================================================
-PURPOSE (PROPÓSITO)
+PURPOSE
 ============================================================================
 The learning rate schedule is one of the most critical hyperparameters
 for training Transformers. Using a constant learning rate leads to:

@@ -26,12 +26,13 @@ var/
 .idea/
 
 # Data and Checkpoints (CRITICAL: Do not leak transactional data)
-data/
+/data/
 *.ckpt
 *.pt
 *.pth
 *.safetensors
 lightning_logs/
+checkpoints/
 outputs/
 multirun/
 wandb/

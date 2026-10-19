@@ -1,52 +1,87 @@
 import sys
 from pathlib import Path
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
-import torch
 import numpy as np
 import pandas as pd
+import pytest
+import torch
+from torch.utils.data import DataLoader
 
+from src.data.data_module import LDMDataModule
+from src.data.mmtt_dataset import (
+    FinancialEventDataset,
+    NormalizationStats,
+    dynamic_sequence_packing_collate_fn,
+)
 from src.data.synthetic_generator import SyntheticTransactionGenerator
-from src.data.mmtt_dataset import FinancialEventDataset, dynamic_sequence_packing_collate_fn
-from src.models.transformer_backbone import MMTTTransformerEncoder
+from src.evaluation.benchmarks import BenchmarkSuite
+from src.evaluation.metrics import (
+    ConformalRiskAbstainer,
+    RiskMetricsEvaluator,
+    calculate_auc,
+    calculate_brier_score,
+    calculate_ece,
+    calculate_f1_flexible,
+    calculate_imputation_rmse,
+    calculate_pr_auc,
+    calculate_recall_at_fpr,
+)
+from src.evaluation.strategic_shift_tester import StrategicShiftTester
 from src.models.joint_fusion_network import CrossNetworkV2, EndToEndFusionLayer
 from src.models.ldm_model import LargeDataModel
-from src.training.lightning_module import LDMPreTrainingModule, LDMFineTuningModule
-from src.evaluation.strategic_shift_tester import StrategicShiftTester
+from src.models.transformer_backbone import (
+    MMTTTransformerEncoder,
+    PeriodicNumericalEmbedding,
+    SinusoidalPositionalEncoding,
+)
+from src.training.lightning_module import LDMFineTuningModule, LDMPreTrainingModule
+from src.training.objectives import (
+    ContextConditionalMaskedLoss,
+    ContrastiveEventSequenceLoss,
+    NextTokenPredictionLoss,
+)
 
 
 def test_synthetic_generator():
-    """Verify synthetic transaction generator output structure and types."""
-    generator = SyntheticTransactionGenerator(num_users=10, seed=42)
-    df = generator.generate()
-    assert isinstance(df, pd.DataFrame)
-    assert not df.empty
-    assert "user_id" in df.columns
-    assert "mcc_token" in df.columns
-    assert "amount" in df.columns
-    assert "time_delta" in df.columns
-    assert "is_fraud" in df.columns
+    """Verify synthetic transaction generator output structure, types, and determinism."""
+    generator_a = SyntheticTransactionGenerator(num_users=12, seed=42)
+    generator_b = SyntheticTransactionGenerator(num_users=12, seed=42)
+    df_a = generator_a.generate()
+    df_b = generator_b.generate()
+
+    assert isinstance(df_a, pd.DataFrame)
+    assert not df_a.empty
+    for col in [
+        "user_id",
+        "mcc_token",
+        "amount",
+        "time_delta",
+        "bureau_score",
+        "income",
+        "age",
+        "is_fraud",
+    ]:
+        assert col in df_a.columns
+
+    pd.testing.assert_frame_equal(df_a, df_b)
 
 
 def test_dataset_and_collate():
-    """Verify dataset loading and sequence collation padding masks."""
+    """Verify dataset loading, normalization stats, and sequence collation padding masks."""
     generator = SyntheticTransactionGenerator(num_users=10, seed=42)
     df = generator.generate()
-    dataset = FinancialEventDataset(df, max_seq_len=20)
+    stats = NormalizationStats.fit(df)
+    dataset = FinancialEventDataset(df, max_seq_len=20, stats=stats)
     assert len(dataset) == 10
 
     sample = dataset[0]
-    assert "keys" in sample
-    assert "values" in sample
-    assert "times" in sample
-    assert "tabular" in sample
-    assert "label" in sample
-    assert "seq_len" in sample
+    for key in ["keys", "values", "times", "tabular", "label", "seq_len"]:
+        assert key in sample
 
-    # Create dummy batch of different sequence lengths to test collation
     item1 = {
         "keys": torch.tensor([1, 2, 3], dtype=torch.long),
         "values": torch.tensor([1.0, 2.0, 3.0], dtype=torch.float),
@@ -64,42 +99,57 @@ def test_dataset_and_collate():
         "seq_len": torch.tensor([2], dtype=torch.long),
     }
 
-    batch = [item1, item2]
-    collated = dynamic_sequence_packing_collate_fn(batch)
+    collated = dynamic_sequence_packing_collate_fn([item1, item2])
 
     assert "packed_keys" in collated
     assert "key_padding_mask" in collated
     assert collated["packed_keys"].shape == (2, 3)
     assert collated["key_padding_mask"].shape == (2, 3)
-
-    # First item has length 3, so no padding: all False
     assert not collated["key_padding_mask"][0].any()
-    # Second item has length 2, so third element is padding: True at index 2
     assert not collated["key_padding_mask"][1, 0].item()
     assert not collated["key_padding_mask"][1, 1].item()
     assert collated["key_padding_mask"][1, 2].item()
 
 
-def test_cross_network_v2():
-    """Verify DCNv2 full-rank and low-rank layer forward pass shapes."""
+def test_periodic_numerical_and_positional_encoding():
+    """Verify PLR numerical embeddings and sequence order awareness."""
+    plr = PeriodicNumericalEmbedding(hidden_size=16, num_frequencies=8)
+    scalars = torch.tensor([[0.1, 1.5, -0.8], [2.2, 0.0, 3.4]], dtype=torch.float32)
+    emb = plr(scalars)
+    assert emb.shape == (2, 3, 16)
+    assert not torch.isnan(emb).any()
+
+    pos = SinusoidalPositionalEncoding(hidden_size=16, max_len=32)
+    pe = pos(10)
+    assert pe.shape == (1, 10, 16)
+    # Distinct sequence positions must receive distinct positional encodings
+    assert not torch.allclose(pe[:, 0, :], pe[:, 1, :])
+
+
+def test_cross_network_v2_and_single_sample_fusion():
+    """Verify DCNv2 full-rank, low-rank, and single-sample inference stability."""
     batch_size = 4
     input_dim = 16
 
-    # Full-rank DCNv2
     cross_full = CrossNetworkV2(input_dim=input_dim, num_layers=3, low_rank=None)
     x = torch.randn(batch_size, input_dim)
     out_full = cross_full(x)
     assert out_full.shape == (batch_size, input_dim)
 
-    # Low-rank DCNv2
     cross_low = CrossNetworkV2(input_dim=input_dim, num_layers=3, low_rank=4)
     out_low = cross_low(x)
     assert out_low.shape == (batch_size, input_dim)
 
+    # Single-sample inference (batch_size=1) must not fail
+    fusion = EndToEndFusionLayer(transformer_hidden_size=16, tabular_feature_size=3, dcn_layers=2)
+    fusion.eval()
+    logits_1 = fusion(torch.randn(1, 16), torch.randn(1, 3))
+    assert logits_1.shape == (1, 1)
 
-def test_attention_padding_mask_effectiveness():
-    """Verify that padding mask prevents representation contamination."""
-    # Instantiating the backbone
+
+@pytest.mark.parametrize("pooling_mode", ["cls", "mean", "max", "attentive"])
+def test_attention_padding_mask_effectiveness(pooling_mode):
+    """Verify that padding mask prevents representation contamination across all pooling modes."""
     encoder = MMTTTransformerEncoder(
         vocab_size=10,
         hidden_size=16,
@@ -107,12 +157,10 @@ def test_attention_padding_mask_effectiveness():
         num_heads=2,
         use_virtual_tokens=True,
         num_virtual_tokens=2,
-        pooling="mean"
+        pooling=pooling_mode,
     )
     encoder.eval()
 
-    # We will build two batches. Both have 1 sample of length 2.
-    # Batch A has padding element as 0. Batch B has padding element as 9.
     keys_a = torch.tensor([[1, 2, 0]], dtype=torch.long)
     values_a = torch.tensor([[0.5, 0.8, 0.0]], dtype=torch.float)
     times_a = torch.tensor([[0, 1, 0]], dtype=torch.long)
@@ -121,22 +169,38 @@ def test_attention_padding_mask_effectiveness():
     values_b = torch.tensor([[0.5, 0.8, -99.9]], dtype=torch.float)
     times_b = torch.tensor([[0, 1, 999]], dtype=torch.long)
 
-    # Padding mask says index 2 is padding (True)
     mask = torch.tensor([[False, False, True]], dtype=torch.bool)
 
     with torch.no_grad():
         out_a = encoder(keys_a, values_a, times_a, key_padding_mask=mask)
         out_b = encoder(keys_b, values_b, times_b, key_padding_mask=mask)
+        pool_a = encoder.get_pooled_output(keys_a, values_a, times_a, key_padding_mask=mask)
+        pool_b = encoder.get_pooled_output(keys_b, values_b, times_b, key_padding_mask=mask)
 
-    # Validate that the representation of valid indices (virtual tokens and tokens 1, 2)
-    # is identical despite the padding token's values changing
-    # out shapes are [1, 2 (virtual) + 3 (sequence) = 5, 16]
-    # Padded index in the output sequence is index 4
     torch.testing.assert_close(out_a[:, :4, :], out_b[:, :4, :], rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(pool_a, pool_b, rtol=1e-5, atol=1e-5)
 
 
-def test_end_to_end_model_and_lightning():
-    """Verify pretraining and finetuning Lightning step executions."""
+def test_ssl_objectives_and_coles():
+    """Verify NTP, LimiX multi-modal reconstruction, and CoLES contrastive objectives."""
+    ntp = NextTokenPredictionLoss(vocab_size=10, hidden_size=16)
+    hidden = torch.randn(3, 5, 16, requires_grad=True)
+    target_k = torch.randint(0, 10, (3, 5))
+    target_v = torch.randn(3, 5)
+    ntp_loss, ntp_metrics = ntp(hidden, target_k, target_v)
+    assert ntp_loss.requires_grad
+    assert "loss_ce" in ntp_metrics and "loss_mse" in ntp_metrics
+
+    coles = ContrastiveEventSequenceLoss(temperature=0.15)
+    z1 = torch.randn(4, 16, requires_grad=True)
+    z2 = z1 + 0.05 * torch.randn(4, 16)
+    c_loss = coles(z1, z2)
+    assert c_loss.requires_grad
+    assert c_loss.item() > 0.0
+
+
+def test_end_to_end_model_and_lightning(tmp_path):
+    """Verify pretraining, finetuning, and safe checkpoint serialization."""
     config = {
         "vocab_size": 20,
         "hidden_size": 16,
@@ -163,13 +227,14 @@ def test_end_to_end_model_and_lightning():
         num_virtual_tokens=2,
     )
 
-    # Test pretraining module step
     pretrain_module = LDMPreTrainingModule(model, config)
     dummy_batch = {
         "packed_keys": torch.tensor([[1, 2, 3], [4, 5, 0]], dtype=torch.long),
         "packed_values": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 0.0]], dtype=torch.float),
         "packed_times": torch.tensor([[0, 1, 2], [0, 1, 0]], dtype=torch.long),
-        "key_padding_mask": torch.tensor([[False, False, False], [False, False, True]], dtype=torch.bool),
+        "key_padding_mask": torch.tensor(
+            [[False, False, False], [False, False, True]], dtype=torch.bool
+        ),
     }
 
     loss = pretrain_module.training_step(dummy_batch, 0)
@@ -179,13 +244,9 @@ def test_end_to_end_model_and_lightning():
     val_loss = pretrain_module.validation_step(dummy_batch, 0)
     assert isinstance(val_loss, torch.Tensor)
 
-    # Test finetuning module step
     finetune_module = LDMFineTuningModule(model, config)
     dummy_ft_batch = {
-        "packed_keys": torch.tensor([[1, 2, 3], [4, 5, 0]], dtype=torch.long),
-        "packed_values": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 0.0]], dtype=torch.float),
-        "packed_times": torch.tensor([[0, 1, 2], [0, 1, 0]], dtype=torch.long),
-        "key_padding_mask": torch.tensor([[False, False, False], [False, False, True]], dtype=torch.bool),
+        **dummy_batch,
         "tabular": torch.randn(2, 3),
         "labels": torch.tensor([[0], [1]], dtype=torch.long),
     }
@@ -194,33 +255,111 @@ def test_end_to_end_model_and_lightning():
     assert isinstance(ft_loss, torch.Tensor)
     assert not torch.isnan(ft_loss)
 
+    # Verify safe checkpoint save/load roundtrip (weights_only=True)
+    ckpt_file = tmp_path / "model_safe.pt"
+    model.save_checkpoint(str(ckpt_file), extra_info={"epoch": 1})
+    loaded_model = LargeDataModel.load_checkpoint(str(ckpt_file))
+    model.eval()
+    loaded_model.eval()
+    with torch.no_grad():
+        out_orig = model(
+            dummy_ft_batch["packed_keys"],
+            dummy_ft_batch["packed_values"],
+            dummy_ft_batch["packed_times"],
+            tabular_features=dummy_ft_batch["tabular"],
+            key_padding_mask=dummy_ft_batch["key_padding_mask"],
+        )
+        out_loaded = loaded_model(
+            dummy_ft_batch["packed_keys"],
+            dummy_ft_batch["packed_values"],
+            dummy_ft_batch["packed_times"],
+            tabular_features=dummy_ft_batch["tabular"],
+            key_padding_mask=dummy_ft_batch["key_padding_mask"],
+        )
+    torch.testing.assert_close(out_orig, out_loaded)
 
-def test_strategic_shift_robustness():
-    """Verify adversarial shift tester application and metrics logic."""
+
+def test_calibrated_metrics_and_conformal_abstention():
+    """Verify PR-AUC, Recall@FPR, Brier Score, ECE, and ConformalRiskAbstainer."""
+    # Well-separated logits: negatives around -2.5, positives around +2.5, 2 ambiguous near 0.0
+    logits = torch.tensor([-3.0, -2.5, -2.0, -1.8, -0.05, 0.05, 2.0, 2.5, 3.0, 3.2])
+    targets = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+
+    roc_auc = calculate_auc(logits, targets)
+    pr_auc = calculate_pr_auc(logits, targets)
+    rec_fpr = calculate_recall_at_fpr(logits, targets, max_fpr=0.25)
+    brier = calculate_brier_score(logits, targets)
+    ece = calculate_ece(logits, targets, n_bins=5)
+    f1 = calculate_f1_flexible(logits, targets, threshold=0.5)
+
+    assert roc_auc >= 0.95
+    assert pr_auc >= 0.95
+    assert rec_fpr >= 0.80
+    assert 0.0 <= brier < 0.15
+    assert 0.0 <= ece < 0.25
+    assert f1 >= 0.90
+
+    abstainer = ConformalRiskAbstainer(alpha=0.15)
+    bounds = abstainer.calibrate(logits, targets)
+    assert bounds["lower_threshold"] < bounds["upper_threshold"]
+
+    decisions = abstainer.predict_with_abstention(logits)
+    # Extreme negative and positive examples must be classified (0 and 1), while near-0 abstains (-1)
+    assert decisions[0].item() == 0
+    assert decisions[-1].item() == 1
+    assert (decisions == -1).any()
+
+    eval_dict = RiskMetricsEvaluator(threshold=0.5, conformal_alpha=0.15).evaluate(logits, targets)
+    assert "conformal_selective_accuracy" in eval_dict
+    assert eval_dict["conformal_selective_accuracy"] >= 0.95
+
+    # Imputation RMSE check
+    preds = torch.tensor([1.0, 2.0, 4.0])
+    trues = torch.tensor([1.0, 2.0, 2.0])
+    mask = torch.tensor([False, False, True])
+    assert abs(calculate_imputation_rmse(preds, trues, mask) - 2.0) < 1e-5
+
+
+def test_strategic_shift_and_benchmark_suite():
+    """Verify adversarial shift tester and BenchmarkSuite execution."""
     model = LargeDataModel(
         vocab_size=10,
         hidden_size=16,
         num_layers=1,
         num_heads=2,
-        tabular_feature_size=2,
+        tabular_feature_size=3,
     )
     model.eval()
 
-    tester = StrategicShiftTester(noise_std=0.1, adversarial_epsilon=0.01)
+    tester = StrategicShiftTester(noise_std=0.1, adversarial_epsilon=0.05)
 
-    keys = torch.tensor([[1, 2]], dtype=torch.long)
-    values = torch.tensor([[0.5, -0.2]], dtype=torch.float)
-    times = torch.tensor([[0, 1]], dtype=torch.long)
-    targets = torch.tensor([0], dtype=torch.long)
-    tabular = torch.tensor([[0.1, 0.2]], dtype=torch.float)
+    keys = torch.tensor([[1, 2, 3], [4, 5, 0]], dtype=torch.long)
+    values = torch.tensor([[0.5, -0.2, 1.1], [0.1, 0.9, 0.0]], dtype=torch.float)
+    times = torch.tensor([[0, 1, 2], [0, 1, 0]], dtype=torch.long)
+    pad_mask = torch.tensor([[False, False, False], [False, False, True]], dtype=torch.bool)
+    targets = torch.tensor([[0], [1]], dtype=torch.long)
+    tabular = torch.randn(2, 3)
 
-    # Test random noise
     noisy = tester.apply_random_shift(values)
     assert noisy.shape == values.shape
 
-    # Test FGSM shift
-    perturbed_keys, perturbed_values, perturbed_times = tester.apply_gradient_adversarial_shift(
-        model, (keys, values, times), targets
+    _, perturbed_values, _ = tester.apply_gradient_adversarial_shift(
+        model, (keys, values, times), targets, tabular=tabular, key_padding_mask=pad_mask
     )
     assert perturbed_values.shape == values.shape
     assert not torch.equal(perturbed_values, values)
+    # Padded index [1, 2] must remain 0.0
+    assert perturbed_values[1, 2].item() == 0.0
+
+    # Test BenchmarkSuite on a small DataLoader
+    gen = SyntheticTransactionGenerator(num_users=20, min_transactions=6, max_transactions=12, fraud_rate=0.25, seed=42)
+    df = gen.generate()
+    ds = FinancialEventDataset(df, max_seq_len=12)
+    loader = DataLoader(ds, batch_size=10, collate_fn=dynamic_sequence_packing_collate_fn)
+
+    suite = BenchmarkSuite(model, {"metric_threshold": 0.5, "enable_strategic_shift": True})
+    results = suite.run_all(loader, val_dataloader=loader)
+    assert "auc" in results
+    assert "pr_auc" in results
+    assert "fgsm_auc" in results
+    assert "conformal_coverage" in results

@@ -1,43 +1,64 @@
-# 3. Pré-treinamento com Masked Joint-Distribution (LimiX)
+# 3. Collapse-Free Self-Supervised Pre-Training (LimiX, PRAGMA & CoLES)
 
-No repositório, o arquivo `src/training/objectives.py` implementa a classe `ContextConditionalMaskedLoss`. Esta é a nossa função de perda para o pré-treinamento.
-
-## O Desafio do Aprendizado Autossupervisionado
-
-Como ensinamos um modelo sem dizer a ele as respostas corretas (sem rótulos de fraude)?
-Nós escondemos partes da pergunta e pedimos para ele adivinhar.
-
-Existem duas abordagens principais:
-1.  **Autoregressiva (Next Token Prediction)**: Usada no GPT. Dado T1, T2, T3... adivinhe o T4.
-2.  **Bidirecional (Masked Modeling)**: Usada no BERT. Esconda tokens aleatórios e adivinhe usando o que vem antes E o que vem depois.
-
-Nós usamos a abordagem **Bidirecional**, inspirada no modelo LimiX.
-
-## Por que Bidirecional para Dados Financeiros?
-
-Ao contrário da fala ou do texto, que são estritamente sequenciais (uma palavra após a outra), o comportamento financeiro é uma **distribuição conjunta** (Joint-Distribution).
-
-Isso significa que a correlação não é apenas no tempo. Se eu sei que o usuário tem uma renda alta (dado estático) e gasta muito em passagens aéreas (categoria), eu posso inferir o valor gasto no restaurante de hoje — mesmo sem olhar a transação de ontem.
-
-O objetivo do pré-treinamento é reconstruir a distribuição de dados mascarada.
-
-## O Cronograma Heterogêneo de Máscaras (Heterogeneous Mask Schedule)
-
-O LimiX introduziu um conceito poderoso: se você mascarar as coisas de forma puramente aleatória (como o BERT faz com texto), o modelo "trapaceia". Se eu esconder a transação 5, o modelo simplesmente copia o valor da transação 4 ou 6, sem aprender padrões profundos.
-
-Para forçar o aprendizado real, usamos um cronograma heterogêneo (implementado no `objectives.py`):
-
-1.  **Máscara de Célula (Cell Masking)**: Esconde features individuais aleatoriamente (~60%).
-2.  **Máscara de Bloco (Block Masking)**: Esconde transações *consecutivas* (~30%). O modelo não pode mais copiar do vizinho; ele precisa entender a tendência de longo prazo.
-3.  **Expansão Aleatória**: Adiciona ruído na máscara para garantir que os padrões não fiquem previsíveis (~10%).
-
-## A Perda (Loss) de Reconstrução
-
-Durante o treino, o modelo recebe as transações com ruído (zeros nas posições mascaradas) e tenta reconstruir a sequência original.
-
-Nós calculamos o **MSE (Mean Squared Error)** apenas nas posições que foram mascaradas. O modelo é forçado a usar sua representação interna para preencher as lacunas.
-
-Quando a `pretrain/val_loss` cai, significa que o modelo aprendeu a lógica por trás de "como e por que as pessoas gastam dinheiro".
+In [`src/training/objectives.py`](../src/training/objectives.py) and [`src/training/lightning_module.py`](../src/training/lightning_module.py), the LDM implements a hybrid self-supervised learning (SSL) engine designed specifically to prevent **representation collapse** while capturing both local feature correlations and global user trajectory semantics.
 
 ---
-**Próximo Passo**: Leia [04_finetuning_dcnv2.md](04_finetuning_dcnv2.md) para ver como usamos esse conhecimento para caçar fraudes.
+
+## Why Naive Latent Masking Collapses
+
+A common pitfall in tabular self-supervised learning is minimizing the Mean Squared Error between an online encoder's masked output $f_\theta(\tilde{x})$ and its unmasked output $\text{sg}(f_\theta(x))$ using identical network weights without input-space feature reconstruction or contrastive repulsion. In that regime, the network can minimize loss trivially by mapping all inputs toward a low-variance constant subspace.
+
+To guarantee rich, high-rank representations, `LDMPreTrainingModule` combines three complementary mechanisms:
+
+```mermaid
+graph LR
+    A[Clean KVT Sequence] -->|Heterogeneous Mask 1| B[Corrupted View 1]
+    A -->|Heterogeneous Mask 2| C[Corrupted View 2]
+    B --> D[MMTT Transformer Encoder]
+    C --> D
+    D -->|Token Heads| E[Multi-Modal Reconstruction: Key CE + Value Huber + Time Huber]
+    D -->|Asymmetric Predictor| F[Stop-Grad Latent Consistency]
+    D -->|Pooled Views z1, z2| G[CoLES Symmetric InfoNCE Contrastive Loss]
+```
+
+---
+
+## 1. Heterogeneous Mask Schedule (`LimiX`)
+
+Unlike natural language, financial transaction sequences exhibit strong local persistence (e.g., recurring merchant visits or split payments). Purely uniform random token masking (BERT-style) allows the model to interpolate trivially from immediate neighbors.
+
+Following **LimiX** (`arXiv:2509.03505`), `ContextConditionalMaskedLoss.heterogeneous_mask_schedule` combines:
+* **Cell Masking:** Independent random event corruption at base probability $p_{\text{mask}}$.
+* **Contiguous Block Masking:** Temporal window expansion masking consecutive events so the model must infer multi-step spending trajectories rather than copying adjacent tokens.
+* **Probabilistic Neighbor Expansion:** Stochastic bidirectional span widening across 30% of sequences, while guaranteeing at least one masked and one visible event per sequence.
+
+---
+
+## 2. Multi-Modal Feature & Asymmetric Latent Reconstruction (`PRAGMA` & `LimiX`)
+
+At every non-padded masked position $i \in \mathcal{M}$, `LargeDataModel.predict_masked_modalities` projects the contextual token representation $\mathbf{h}_i \in \mathbb{R}^d$ through three modality-specific reconstruction heads plus an asymmetric latent predictor:
+
+$$\mathcal{L}_{\text{multimodal}} = \mathcal{L}_{\text{CE}}(\hat{\mathbf{k}}_i, k_i) + \mathcal{L}_{\text{Huber}}(\hat{v}_i, v_i) + 0.25 \,\mathcal{L}_{\text{Huber}}(\hat{t}_i, \log(1 + \Delta t_i))$$
+
+Because the encoder must simultaneously recover the discrete merchant category $k_i$, the standardized transaction amount $v_i$, and the log-time delta $\log(1 + \Delta t_i)$, constant-vector collapse is mathematically impossible.
+
+---
+
+## 3. Contrastive Event Sequence Learning (`CoLES`)
+
+To ensure that the **sequence-level pooled representation** (`get_pooled_embedding`) is directly discriminative for downstream user-level classification, we integrate **CoLES** (*Contrastive Learning for Event Sequences*, Babaev et al., *SIGMOD* 2022, `arXiv:2002.08232`) via `ContrastiveEventSequenceLoss`:
+
+1. Two independently masked views of each user's sequence in the mini-batch are encoded and pooled into $\mathbf{z}^{(1)}, \mathbf{z}^{(2)} \in \mathbb{R}^{B \times d}$.
+2. Both views are $\ell_2$-normalized onto the unit hypersphere: $\tilde{\mathbf{z}}_u = \mathbf{z}_u / \|\mathbf{z}_u\|_2$.
+3. Symmetric temperature-scaled InfoNCE loss pulls positive views of the same user together while pushing apart all $B - 1$ other users in the batch:
+   $$\mathcal{L}_{\text{CoLES}} = -\frac{1}{2B} \sum_{u=1}^B \left[ \log \frac{\exp(\tilde{\mathbf{z}}_u^{(1)} \cdot \tilde{\mathbf{z}}_u^{(2)} / \tau)}{\sum_{v=1}^B \exp(\tilde{\mathbf{z}}_u^{(1)} \cdot \tilde{\mathbf{z}}_v^{(2)} / \tau)} + \log \frac{\exp(\tilde{\mathbf{z}}_u^{(2)} \cdot \tilde{\mathbf{z}}_u^{(1)} / \tau)}{\sum_{v=1}^B \exp(\tilde{\mathbf{z}}_u^{(2)} \cdot \tilde{\mathbf{z}}_v^{(1)} / \tau)} \right]$$
+
+---
+
+## Autoregressive Alternative: Next Token Prediction (`NextTokenPredictionLoss`)
+
+For generative trajectory simulation (analogous to *TransactionGPT* and *TabGPT*), `NextTokenPredictionLoss` in [`src/training/objectives.py`](../src/training/objectives.py) provides causal next-event prediction (`is_causal=True`), jointly optimizing categorical Cross-Entropy with label smoothing and continuous MSE over shifted sequences $t_{1:S-1} \rightarrow t_{2:S}$.
+
+---
+
+**Next Step:** Read [04_finetuning_dcnv2.md](04_finetuning_dcnv2.md) to learn how pre-trained sequence embeddings are fused with static credit bureau features via DCNv2.

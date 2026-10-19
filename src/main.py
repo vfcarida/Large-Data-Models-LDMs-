@@ -1,71 +1,69 @@
 """
-LDM Research Lab — Main Entrypoint.
+LDM Research Lab — Main Pipeline Entrypoint.
 
 ============================================================================
-USAGE (USO)
+USAGE
 ============================================================================
-    # Run full pipeline (generate data → pretrain → finetune → evaluate)
+    # Run full pipeline (generate data -> pretrain -> finetune -> evaluate)
     python src/main.py
 
-    # Run with small config (fast, for testing)
+    # Run with small config (fast CPU verification)
     python src/main.py --config small
 
-    # Run only evaluation on a trained model
+    # Run only evaluation on a trained model checkpoint
     python src/main.py --eval-only --checkpoint results/ldm_finetuned.pt
 
 ============================================================================
 PIPELINE OVERVIEW
 ============================================================================
-    1. GENERATE: Create synthetic financial transaction data
-    2. PRETRAIN: Self-supervised masked modeling (LimiX objective)
-    3. FINETUNE: Supervised fraud classification with DCNv2 fusion
-    4. EVALUATE: Compute final metrics (AUC, F1, Precision, Recall)
-    5. REPORT:   Save results, metrics, and training curves
-
+    1. GENERATE: Create synthetic financial transaction trajectories (KVT + Tabular)
+    2. PRETRAIN: Collapse-free self-supervised modeling (LimiX + PRAGMA + CoLES)
+    3. FINETUNE: Supervised fraud classification with parallel DCNv2 fusion
+    4. EVALUATE: Compute discrimination (ROC-AUC, PR-AUC, Recall@FPR, F1),
+                 calibration (ECE, Brier), Conformal Abstention, and FGSM shift
+    5. REPORT:   Save checkpoints, JSON configuration, and Markdown audit report
 ============================================================================
 """
 
-import os
-import sys
-import json
-import time
-import logging
 import argparse
-from pathlib import Path
 from datetime import datetime
+import json
+import logging
+from pathlib import Path
+import sys
+import time
+from typing import Any, Dict
 
-import torch
 import numpy as np
+import torch
+import yaml
 
 try:
     import pytorch_lightning as pl
     from pytorch_lightning.callbacks import (
-        ModelCheckpoint,
         EarlyStopping,
-        RichProgressBar,
         LearningRateMonitor,
+        ModelCheckpoint,
+        RichProgressBar,
     )
 except ImportError:
     import lightning.pytorch as pl
     from lightning.pytorch.callbacks import (
-        ModelCheckpoint,
         EarlyStopping,
-        RichProgressBar,
         LearningRateMonitor,
+        ModelCheckpoint,
+        RichProgressBar,
     )
 
-# Add project root to path for imports
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.data_module import LDMDataModule
+from src.evaluation.benchmarks import BenchmarkSuite
 from src.models.ldm_model import LargeDataModel
-from src.training.lightning_module import LDMPreTrainingModule, LDMFineTuningModule
-from src.evaluation.metrics import calculate_auc, calculate_f1_flexible
+from src.training.lightning_module import LDMFineTuningModule, LDMPreTrainingModule
 
-# =============================================================================
-# Logging Configuration
-# =============================================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -73,25 +71,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("LDM")
 
-
-# =============================================================================
-# Configuration Presets
-# =============================================================================
-# Two configs: "default" for real training, "small" for quick testing
-# =============================================================================
-
-CONFIGS = {
+DEFAULT_CONFIGS: Dict[str, Dict[str, Any]] = {
     "default": {
-        # Data
+        "_config_name": "default",
         "data_path": "data/synthetic_transactions.parquet",
-        "num_users": 1000,
-        "min_transactions": 20,
-        "max_transactions": 200,
+        "num_users": 2500,
+        "min_transactions": 30,
+        "max_transactions": 300,
         "fraud_rate": 0.02,
-        "batch_size": 32,
+        "batch_size": 64,
         "max_seq_len": 256,
         "num_workers": 0,
-        # Model
         "vocab_size": 20,
         "hidden_size": 128,
         "num_layers": 4,
@@ -99,31 +89,35 @@ CONFIGS = {
         "dropout": 0.1,
         "tabular_feature_size": 3,
         "dcn_layers": 3,
-        # Pre-training
+        "use_virtual_tokens": True,
+        "num_virtual_tokens": 2,
+        "pooling": "mean",
         "pretrain_epochs": 10,
         "pretrain_lr": 1e-3,
-        "ssl_masking_prob": 0.15,
-        # Fine-tuning
-        "finetune_epochs": 20,
+        "ssl_masking_prob": 0.20,
+        "ssl_temperature": 0.15,
+        "finetune_epochs": 15,
         "finetune_lr": 1e-3,
-        "pos_weight": 10.0,
+        "pos_weight": 8.0,
         "metric_threshold": 0.5,
-        # General
+        "conformal_alpha": 0.10,
+        "enable_strategic_shift": True,
+        "noise_std": 0.10,
+        "adversarial_epsilon": 0.05,
         "weight_decay": 0.01,
         "warmup_steps": 50,
         "seed": 42,
     },
     "small": {
-        # Minimal config for quick testing on CPU
+        "_config_name": "small",
         "data_path": "data/synthetic_small.parquet",
         "num_users": 200,
-        "min_transactions": 10,
+        "min_transactions": 12,
         "max_transactions": 50,
-        "fraud_rate": 0.05,
+        "fraud_rate": 0.10,
         "batch_size": 16,
         "max_seq_len": 64,
         "num_workers": 0,
-        # Tiny model
         "vocab_size": 20,
         "hidden_size": 64,
         "num_layers": 2,
@@ -131,23 +125,45 @@ CONFIGS = {
         "dropout": 0.1,
         "tabular_feature_size": 3,
         "dcn_layers": 2,
-        # Fewer epochs
+        "use_virtual_tokens": True,
+        "num_virtual_tokens": 2,
+        "pooling": "mean",
         "pretrain_epochs": 3,
         "pretrain_lr": 1e-3,
         "ssl_masking_prob": 0.15,
-        "finetune_epochs": 5,
-        "finetune_lr": 1e-3,
-        "pos_weight": 5.0,
+        "ssl_temperature": 0.15,
+        "finetune_epochs": 8,
+        "finetune_lr": 2e-3,
+        "pos_weight": 4.0,
         "metric_threshold": 0.5,
+        "conformal_alpha": 0.10,
+        "enable_strategic_shift": True,
+        "noise_std": 0.10,
+        "adversarial_epsilon": 0.05,
         "weight_decay": 0.01,
-        "warmup_steps": 20,
+        "warmup_steps": 10,
         "seed": 42,
     },
 }
 
 
-def set_seed(seed: int):
-    """Set random seeds for reproducibility across all libraries."""
+def load_config(preset_name: str) -> Dict[str, Any]:
+    """Loads configuration from `configs/` YAML files with fallback to `DEFAULT_CONFIGS`."""
+    config = dict(DEFAULT_CONFIGS.get(preset_name, DEFAULT_CONFIGS["default"]))
+    yaml_filename = "config.yaml" if preset_name == "default" else f"config_{preset_name}.yaml"
+    yaml_path = PROJECT_ROOT / "configs" / yaml_filename
+
+    if yaml_path.exists():
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                config.update(loaded)
+    config["_config_name"] = preset_name
+    return config
+
+
+def set_seed(seed: int) -> None:
+    """Sets random seeds for deterministic reproducibility across all libraries."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
@@ -157,57 +173,57 @@ def set_seed(seed: int):
 
 
 def create_results_dir() -> Path:
-    """Create timestamped results directory."""
+    """Ensures the `results/` directory exists."""
     results_dir = PROJECT_ROOT / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     return results_dir
 
 
-def run_pretraining(config: dict, data_module: LDMDataModule, results_dir: Path) -> LargeDataModel:
+def run_pretraining(
+    config: Dict[str, Any],
+    data_module: LDMDataModule,
+    results_dir: Path,
+) -> LargeDataModel:
     """
-    Phase 1: Self-Supervised Pre-Training.
-
-    Trains the Transformer encoder using masked prediction (LimiX).
-    No labels required — the model learns from the structure of
-    transaction sequences.
+    Phase 1: Collapse-Free Self-Supervised Pre-Training (LimiX + PRAGMA + CoLES).
     """
     logger.info("=" * 70)
-    logger.info("PHASE 1: SELF-SUPERVISED PRE-TRAINING (LimiX)")
+    logger.info("PHASE 1: SELF-SUPERVISED PRE-TRAINING (LimiX + PRAGMA + CoLES)")
     logger.info("=" * 70)
 
-    # Create model
     model = LargeDataModel(
-        vocab_size=config["vocab_size"],
-        hidden_size=config["hidden_size"],
-        num_layers=config["num_layers"],
-        num_heads=config["num_heads"],
-        dropout=config["dropout"],
-        tabular_feature_size=config["tabular_feature_size"],
-        dcn_layers=config["dcn_layers"],
+        vocab_size=int(config["vocab_size"]),
+        hidden_size=int(config["hidden_size"]),
+        num_layers=int(config["num_layers"]),
+        num_heads=int(config["num_heads"]),
+        dropout=float(config["dropout"]),
+        tabular_feature_size=int(config["tabular_feature_size"]),
+        dcn_layers=int(config["dcn_layers"]),
+        use_virtual_tokens=bool(config.get("use_virtual_tokens", True)),
+        num_virtual_tokens=int(config.get("num_virtual_tokens", 2)),
+        pooling=config.get("pooling", "mean"),
     )
 
-    # Estimate max steps
     if data_module.train_dataset is not None:
-        steps_per_epoch = max(1, len(data_module.train_dataset) // config["batch_size"])
+        steps_per_epoch = max(1, len(data_module.train_dataset) // int(config["batch_size"]))
     else:
         steps_per_epoch = 100
-    max_steps = steps_per_epoch * config["pretrain_epochs"]
+    max_steps = steps_per_epoch * int(config["pretrain_epochs"])
 
-    # Create Lightning module
     pretrain_config = {
-        "learning_rate": config["pretrain_lr"],
-        "weight_decay": config["weight_decay"],
-        "warmup_steps": config["warmup_steps"],
+        "learning_rate": float(config["pretrain_lr"]),
+        "weight_decay": float(config["weight_decay"]),
+        "warmup_steps": int(config["warmup_steps"]),
         "max_steps": max_steps,
-        "ssl_masking_prob": config["ssl_masking_prob"],
+        "ssl_masking_prob": float(config["ssl_masking_prob"]),
+        "ssl_temperature": float(config.get("ssl_temperature", 0.15)),
     }
     lightning_module = LDMPreTrainingModule(model, pretrain_config)
 
-    # Callbacks
     callbacks = [
         ModelCheckpoint(
             dirpath=str(results_dir / "checkpoints"),
-            filename="pretrain-{epoch:02d}-{pretrain/val_loss:.4f}",
+            filename="pretrain-{epoch:02d}",
             monitor="pretrain/val_loss",
             mode="min",
             save_top_k=1,
@@ -215,33 +231,24 @@ def run_pretraining(config: dict, data_module: LDMDataModule, results_dir: Path)
         LearningRateMonitor(logging_interval="step"),
     ]
 
-    # Try to add RichProgressBar (may not be available)
-    try:
-        callbacks.append(RichProgressBar())
-    except Exception:
-        pass
-
-    # Trainer
     trainer = pl.Trainer(
-        max_epochs=config["pretrain_epochs"],
+        max_epochs=int(config["pretrain_epochs"]),
         callbacks=callbacks,
         default_root_dir=str(results_dir),
         accelerator="auto",
         devices=1,
-        precision="32",  # Use 32-bit for stability in pre-training
-        enable_progress_bar=True,
+        precision="32",
+        enable_progress_bar=False,
         log_every_n_steps=5,
         gradient_clip_val=1.0,
     )
 
-    # Train
     logger.info(f"Starting pre-training for {config['pretrain_epochs']} epochs...")
     start_time = time.time()
     trainer.fit(lightning_module, data_module)
     pretrain_time = time.time() - start_time
     logger.info(f"Pre-training completed in {pretrain_time:.1f}s")
 
-    # Save pre-trained model
     pretrain_path = results_dir / "ldm_pretrained.pt"
     model.save_checkpoint(str(pretrain_path), extra_info={"pretrain_time": pretrain_time})
 
@@ -249,44 +256,38 @@ def run_pretraining(config: dict, data_module: LDMDataModule, results_dir: Path)
 
 
 def run_finetuning(
-    config: dict,
+    config: Dict[str, Any],
     model: LargeDataModel,
     data_module: LDMDataModule,
     results_dir: Path,
-) -> dict:
+) -> Dict[str, Any]:
     """
-    Phase 2: Supervised Fine-Tuning.
-
-    Takes the pre-trained model and trains it for binary fraud classification
-    using labeled data and the DCNv2 fusion head.
+    Phase 2: Supervised Fine-Tuning & Governance Benchmark Evaluation.
     """
     logger.info("=" * 70)
     logger.info("PHASE 2: SUPERVISED FINE-TUNING (Fraud Classification)")
     logger.info("=" * 70)
 
-    # Estimate max steps
     if data_module.train_dataset is not None:
-        steps_per_epoch = max(1, len(data_module.train_dataset) // config["batch_size"])
+        steps_per_epoch = max(1, len(data_module.train_dataset) // int(config["batch_size"]))
     else:
         steps_per_epoch = 100
-    max_steps = steps_per_epoch * config["finetune_epochs"]
+    max_steps = steps_per_epoch * int(config["finetune_epochs"])
 
-    # Create Lightning module
     finetune_config = {
-        "learning_rate": config["finetune_lr"],
-        "weight_decay": config["weight_decay"],
-        "warmup_steps": config["warmup_steps"],
+        "learning_rate": float(config["finetune_lr"]),
+        "weight_decay": float(config["weight_decay"]),
+        "warmup_steps": int(config["warmup_steps"]),
         "max_steps": max_steps,
-        "pos_weight": config["pos_weight"],
-        "metric_threshold": config["metric_threshold"],
+        "pos_weight": float(config["pos_weight"]),
+        "metric_threshold": float(config["metric_threshold"]),
     }
     lightning_module = LDMFineTuningModule(model, finetune_config)
 
-    # Callbacks
     callbacks = [
         ModelCheckpoint(
             dirpath=str(results_dir / "checkpoints"),
-            filename="finetune-{epoch:02d}-{finetune/val_auc:.4f}",
+            filename="finetune-{epoch:02d}",
             monitor="finetune/val_auc",
             mode="max",
             save_top_k=1,
@@ -295,68 +296,66 @@ def run_finetuning(
             monitor="finetune/val_auc",
             mode="max",
             patience=5,
-            verbose=True,
+            verbose=False,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
 
-    try:
-        callbacks.append(RichProgressBar())
-    except Exception:
-        pass
-
-    # Trainer
     trainer = pl.Trainer(
-        max_epochs=config["finetune_epochs"],
+        max_epochs=int(config["finetune_epochs"]),
         callbacks=callbacks,
         default_root_dir=str(results_dir),
         accelerator="auto",
         devices=1,
         precision="32",
-        enable_progress_bar=True,
+        enable_progress_bar=False,
         log_every_n_steps=5,
         gradient_clip_val=1.0,
     )
 
-    # Train
     logger.info(f"Starting fine-tuning for {config['finetune_epochs']} epochs...")
     start_time = time.time()
     trainer.fit(lightning_module, data_module)
     finetune_time = time.time() - start_time
     logger.info(f"Fine-tuning completed in {finetune_time:.1f}s")
 
-    # Test evaluation
-    logger.info("Running test evaluation...")
-    test_results = trainer.test(lightning_module, data_module)
+    logger.info("Running test evaluation and governance benchmark suite...")
+    test_results_list = trainer.test(lightning_module, data_module, verbose=False)
+    combined_results: Dict[str, Any] = dict(test_results_list[0]) if test_results_list else {}
 
-    # Save final model
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    benchmark = BenchmarkSuite(model, config, device=device)
+    suite_results = benchmark.run_all(
+        data_module.test_dataloader(),
+        val_dataloader=data_module.val_dataloader(),
+    )
+    for k, v in suite_results.items():
+        combined_results[f"benchmark/{k}"] = v
+
     finetune_path = results_dir / "ldm_finetuned.pt"
     model.save_checkpoint(
         str(finetune_path),
-        extra_info={"finetune_time": finetune_time, "test_results": test_results},
+        extra_info={"finetune_time": finetune_time},
     )
 
-    return test_results[0] if test_results else {}
+    return combined_results
 
 
 def generate_report(
-    config: dict,
-    test_results: dict,
+    config: Dict[str, Any],
+    test_results: Dict[str, Any],
     results_dir: Path,
     pretrain_time: float,
     finetune_time: float,
-):
+) -> None:
     """
-    Generates a comprehensive metrics report.
-
-    Creates a markdown report with all training results,
-    suitable for presentation to stakeholders.
+    Generates an audit-ready Markdown metrics report and JSON configuration snapshot.
     """
     logger.info("=" * 70)
     logger.info("GENERATING RESULTS REPORT")
     logger.info("=" * 70)
 
-    report = f"""# LDM Training Results Report
+    report = f"""# LDM Training & Governance Evaluation Report
 
 **Generated**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 **Config**: {config.get('_config_name', 'default')}
@@ -370,6 +369,7 @@ def generate_report(
 | Hidden Size | {config['hidden_size']} |
 | Transformer Layers | {config['num_layers']} |
 | Attention Heads | {config['num_heads']} |
+| Numerical Embedding | Periodic Numerical Embedding (PLR, 16 frequencies) |
 | DCNv2 Cross Layers | {config['dcn_layers']} |
 | Vocabulary Size | {config['vocab_size']} |
 | Dropout | {config['dropout']} |
@@ -387,10 +387,10 @@ def generate_report(
 
 | Phase | Epochs | Learning Rate | Duration |
 |-------|--------|--------------|----------|
-| Pre-training (LimiX) | {config['pretrain_epochs']} | {config['pretrain_lr']} | {pretrain_time:.1f}s |
-| Fine-tuning (Classification) | {config['finetune_epochs']} | {config['finetune_lr']} | {finetune_time:.1f}s |
+| Pre-training (LimiX + PRAGMA + CoLES) | {config['pretrain_epochs']} | {config['pretrain_lr']} | {pretrain_time:.1f}s |
+| Fine-tuning (DCNv2 Classification) | {config['finetune_epochs']} | {config['finetune_lr']} | {finetune_time:.1f}s |
 
-## Test Results (Final Evaluation)
+## Test & Governance Evaluation Results
 
 | Metric | Value |
 |--------|-------|
@@ -401,51 +401,45 @@ def generate_report(
         else:
             report += f"| {key} | {value} |\n"
 
-    report += f"""
+    report += """
 ---
 
 ## Files Generated
 
-- `ldm_pretrained.pt` — Pre-trained encoder checkpoint
-- `ldm_finetuned.pt` — Fine-tuned model (ready for inference)
-- `metrics_report.md` — This report
-- `config.json` — Training configuration
+- `ldm_pretrained.pt` — Self-supervised pre-trained encoder checkpoint
+- `ldm_finetuned.pt` — Fine-tuned classification model checkpoint
+- `metrics_report.md` — Comprehensive evaluation & governance report
+- `config.json` — Reproducible training configuration snapshot
 
 ## Methodology
 
 ### Pre-training (Phase 1)
-Self-supervised masked modeling using the LimiX objective. The model learns
-to reconstruct randomly masked transaction features from visible context.
-No labels required.
+Collapse-free self-supervised modeling combining Masked Joint-Distribution
+Reconstruction (LimiX / PRAGMA) across categorical keys, continuous amounts,
+and temporal deltas with Contrastive Event Sequence Learning (CoLES).
 
-### Fine-tuning (Phase 2)
-Supervised binary classification for fraud detection. Uses the pre-trained
-Transformer encoder combined with a DCNv2 fusion head that integrates
-static tabular features (bureau score, income, age).
-
-### Key Technical Features
-- **KVT Tokenization**: Key-Value-Time encoding preserving financial data semantics
-- **Dynamic Sequence Packing**: Zero-padding-free batching for GPU efficiency
-- **Virtual Token Conditioning**: Continuous prompts for global context
-- **DCNv2 Fusion**: Explicit polynomial feature interactions
-- **Class-Weighted Loss**: Handles extreme fraud rate imbalance
+### Fine-tuning & Risk Governance (Phase 2)
+Supervised binary fraud classification combining pooled MMTT Transformer
+embeddings with standardized static bureau features via a parallel Deep &
+Cross Network v2 (DCNv2) head, evaluated with ROC-AUC, PR-AUC, Recall@FPR,
+Expected Calibration Error (ECE), Brier Score, Conformal Risk Abstention,
+and FGSM adversarial stress testing.
 
 ---
 
 ## References
-1. TransactionGPT (Visa Research, 2025)
-2. PRAGMA (Revolut/NVIDIA, 2025)
-3. LimiX — Masked Joint-Distribution Pre-training
-4. TabPFN v2/2.5 — Prior-Data Fitted Networks
-5. Schema-1 (DLM) — Data Language Model
-6. DCNv2 — Deep & Cross Network V2
+1. Hollmann et al. (2025) — TabPFN v2 (*Nature* 637:319-326, DOI: 10.1038/s41586-024-08328-6)
+2. Dou et al. (2025) — TransactionGPT (Visa Research, arXiv:2511.08939)
+3. Ostroukhov et al. (2026) — PRAGMA (Revolut/NVIDIA, arXiv:2604.08649)
+4. LimiX Team (2025/2026) — LimiX Masked Joint-Distribution (arXiv:2509.03505)
+5. Gorishniy et al. (2022) — Periodic Numerical Embeddings (*NeurIPS 2022*, arXiv:2203.05556)
+6. Babaev et al. (2022) — CoLES Contrastive Event Sequences (*SIGMOD 2022*, arXiv:2002.08232)
+7. Wang et al. (2021) — Deep & Cross Network V2 (*WWW 2021*, arXiv:2008.13535)
 """
 
-    # Save report
     report_path = results_dir / "metrics_report.md"
     report_path.write_text(report, encoding="utf-8")
 
-    # Save config
     config_path = results_dir / "config.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
@@ -453,12 +447,8 @@ static tabular features (bureau score, income, age).
     logger.info(f"Config saved to {config_path}")
 
 
-def main():
+def main() -> None:
     """Main entrypoint for the LDM Research Lab pipeline."""
-
-    # =========================================================================
-    # Argument Parsing
-    # =========================================================================
     parser = argparse.ArgumentParser(
         description="LDM Research Lab — Train and evaluate Large Data Models"
     )
@@ -466,7 +456,7 @@ def main():
         "--config",
         type=str,
         default="default",
-        choices=list(CONFIGS.keys()),
+        choices=list(DEFAULT_CONFIGS.keys()),
         help="Configuration preset to use (default or small)",
     )
     parser.add_argument(
@@ -483,16 +473,12 @@ def main():
     parser.add_argument(
         "--skip-pretrain",
         action="store_true",
-        help="Skip pre-training phase (useful for debugging fine-tuning)",
+        help="Skip pre-training phase (useful for ablation comparisons)",
     )
     args = parser.parse_args()
 
-    # =========================================================================
-    # Setup
-    # =========================================================================
-    config = CONFIGS[args.config].copy()
-    config["_config_name"] = args.config
-    set_seed(config["seed"])
+    config = load_config(args.config)
+    set_seed(int(config["seed"]))
     results_dir = create_results_dir()
 
     logger.info("=" * 70)
@@ -502,30 +488,23 @@ def main():
     logger.info(f"    Results: {results_dir}")
     logger.info("=" * 70)
 
-    # =========================================================================
-    # Data Pipeline
-    # =========================================================================
     data_module = LDMDataModule(
-        data_path=config["data_path"],
-        batch_size=config["batch_size"],
-        num_workers=config["num_workers"],
-        max_seq_len=config["max_seq_len"],
-        num_users=config["num_users"],
-        min_transactions=config["min_transactions"],
-        max_transactions=config["max_transactions"],
-        fraud_rate=config["fraud_rate"],
-        seed=config["seed"],
+        data_path=str(PROJECT_ROOT / config["data_path"]),
+        batch_size=int(config["batch_size"]),
+        num_workers=int(config["num_workers"]),
+        max_seq_len=int(config["max_seq_len"]),
+        num_users=int(config["num_users"]),
+        min_transactions=int(config["min_transactions"]),
+        max_transactions=int(config["max_transactions"]),
+        fraud_rate=float(config["fraud_rate"]),
+        seed=int(config["seed"]),
     )
     data_module.prepare_data()
     data_module.setup()
 
-    # Update vocab size from actual data
     config["vocab_size"] = int(data_module.vocab_size)
     config["tabular_feature_size"] = int(data_module.tabular_feature_size)
 
-    # =========================================================================
-    # Phase 1: Pre-Training
-    # =========================================================================
     pretrain_time = 0.0
     if not args.eval_only and not args.skip_pretrain:
         start = time.time()
@@ -534,35 +513,35 @@ def main():
     elif args.checkpoint:
         model = LargeDataModel.load_checkpoint(args.checkpoint)
     else:
-        # Skip pretrain, create fresh model
         model = LargeDataModel(
-            vocab_size=config["vocab_size"],
-            hidden_size=config["hidden_size"],
-            num_layers=config["num_layers"],
-            num_heads=config["num_heads"],
-            dropout=config["dropout"],
-            tabular_feature_size=config["tabular_feature_size"],
-            dcn_layers=config["dcn_layers"],
+            vocab_size=int(config["vocab_size"]),
+            hidden_size=int(config["hidden_size"]),
+            num_layers=int(config["num_layers"]),
+            num_heads=int(config["num_heads"]),
+            dropout=float(config["dropout"]),
+            tabular_feature_size=int(config["tabular_feature_size"]),
+            dcn_layers=int(config["dcn_layers"]),
+            use_virtual_tokens=bool(config.get("use_virtual_tokens", True)),
+            num_virtual_tokens=int(config.get("num_virtual_tokens", 2)),
+            pooling=config.get("pooling", "mean"),
         )
 
-    # =========================================================================
-    # Phase 2: Fine-Tuning
-    # =========================================================================
     finetune_time = 0.0
-    test_results = {}
+    test_results: Dict[str, Any] = {}
     if not args.eval_only:
         start = time.time()
         test_results = run_finetuning(config, model, data_module, results_dir)
         finetune_time = time.time() - start
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        benchmark = BenchmarkSuite(model, config, device=device)
+        test_results = benchmark.run_all(
+            data_module.test_dataloader(),
+            val_dataloader=data_module.val_dataloader(),
+        )
 
-    # =========================================================================
-    # Report Generation
-    # =========================================================================
     generate_report(config, test_results, results_dir, pretrain_time, finetune_time)
 
-    # =========================================================================
-    # Final Summary
-    # =========================================================================
     logger.info("")
     logger.info("=" * 70)
     logger.info("    PIPELINE COMPLETE")

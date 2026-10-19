@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use Large Data Models (LDMs) Research Lab in your research or engineering systems, please cite it using the metadata below."
+title: "Large Data Models (LDMs) Research Lab: Self-Supervised Foundation Models for Multi-Modal-Temporal-Tabular Sequences"
+type: software
+authors:
+  - family-names: "Caridá"
+    given-names: "Vinicius"
+    alias: "vfcarida"
+repository-code: "https://github.com/vfcarida/Large-Data-Models-LDMs-"
+url: "https://github.com/vfcarida/Large-Data-Models-LDMs-"
+license: MIT
+version: "0.2.0"
+date-released: "2026-10-19"
+keywords:
+  - large-data-models
+  - tabular-foundation-models
+  - transaction-sequences
+  - self-supervised-learning
+  - fraud-detection
+  - conformal-prediction
