@@ -363,3 +363,127 @@ def test_strategic_shift_and_benchmark_suite():
     assert "pr_auc" in results
     assert "fgsm_auc" in results
     assert "conformal_coverage" in results
+    assert "torchscript_p99_ms" in results
+
+
+# =============================================================================
+# 6. Next-Horizon Frontier Tracks Tests (TabR, RelBench GNN, TabPFN v2, Export)
+# =============================================================================
+
+
+def test_tabr_retrieval_self_masking_and_memory_bank():
+    """Verify TabRRetrievalModule circular memory bank and batch_size=1 eval retrieval."""
+    from src.models.retrieval_attention import TabRRetrievalModule
+
+    torch.manual_seed(42)
+    tabr = TabRRetrievalModule(embed_dim=16, top_k=3, memory_size=10, dropout=0.0)
+    tabr.train()
+
+    batch_emb = torch.randn(6, 16)
+    batch_labels = torch.tensor([0, 1, 0, 1, 0, 1], dtype=torch.long)
+
+    # First forward pass in training mode with empty memory bank (uses leave-one-out in-batch)
+    enriched, attn = tabr(batch_emb, update_bank=True, query_labels=batch_labels)
+    assert enriched.shape == (6, 16)
+    assert attn.shape == (6, 3)
+    assert torch.allclose(attn.sum(dim=-1), torch.ones(6), atol=1e-5)
+    assert int(tabr.memory_count.item()) == 6
+
+    # Switch to eval mode and verify batch_size=1 single-swipe retrieval from memory bank
+    tabr.eval()
+    single_query = torch.randn(1, 16)
+    single_out, single_attn = tabr(single_query)
+    assert single_out.shape == (1, 16)
+    assert single_attn.shape == (1, 3)
+    assert torch.isfinite(single_out).all()
+
+
+def test_relational_entity_gnn_mask_invariance_and_b1():
+    """Verify RelationalEntityGNN respects key_padding_mask and supports batch_size=1."""
+    from src.models.relational_gnn import RelationalEntityGNN
+
+    torch.manual_seed(42)
+    gnn = RelationalEntityGNN(vocab_size=10, embed_dim=16, num_layers=2, dropout=0.0)
+    gnn.eval()
+
+    user_emb = torch.randn(1, 16)
+    keys = torch.tensor([[1, 2, 3, 9, 9]], dtype=torch.long)
+    vals_a = torch.tensor([[0.5, 1.2, 0.8, 0.0, 0.0]], dtype=torch.float32)
+    vals_b = torch.tensor([[0.5, 1.2, 0.8, 500.0, 999.0]], dtype=torch.float32)
+    pad_mask = torch.tensor([[False, False, False, True, True]], dtype=torch.bool)
+
+    out_a = gnn(user_emb, keys, vals_a, key_padding_mask=pad_mask)
+    out_b = gnn(user_emb, keys, vals_b, key_padding_mask=pad_mask)
+
+    assert out_a.shape == (1, 16)
+    # Padded positions must have zero influence on bipartite adjacency
+    assert torch.allclose(out_a, out_b, atol=1e-6)
+
+
+def test_in_context_pfn_head_query_order_invariance():
+    """Verify InContextPFNHead and LargeDataModel.forward_in_context query-order invariance."""
+    from src.models.in_context_pfn import InContextPFNHead
+
+    torch.manual_seed(42)
+    pfn = InContextPFNHead(input_dim=12, d_model=16, num_heads=2, num_layers=2, dropout=0.0)
+    pfn.eval()
+
+    support_x = torch.randn(8, 12)
+    support_y = torch.tensor([0, 1, 0, 1, 0, 0, 1, 0], dtype=torch.long)
+    query_x = torch.randn(4, 12)
+
+    logits_orig = pfn(query_x, support_x, support_y)
+    # Reverse query order
+    perm = torch.tensor([3, 2, 1, 0], dtype=torch.long)
+    logits_perm = pfn(query_x[perm], support_x, support_y)
+
+    assert logits_orig.shape == (4, 1)
+    # Asymmetric attention mask guarantees each query depends solely on Support + self
+    assert torch.allclose(logits_orig[perm], logits_perm, atol=1e-5)
+
+    # Also test end-to-end LargeDataModel.forward_in_context
+    model = LargeDataModel(vocab_size=10, hidden_size=16, num_layers=1, num_heads=2, tabular_feature_size=3)
+    model.eval()
+    q_logits = model.forward_in_context(
+        query_keys=torch.randint(0, 10, (3, 6)),
+        query_values=torch.randn(3, 6),
+        query_times=torch.randint(0, 50, (3, 6)),
+        query_tabular=torch.randn(3, 3),
+        support_keys=torch.randint(0, 10, (6, 6)),
+        support_values=torch.randn(6, 6),
+        support_times=torch.randint(0, 50, (6, 6)),
+        support_tabular=torch.randn(6, 3),
+        support_labels=torch.tensor([0, 1, 0, 1, 0, 1]),
+    )
+    assert q_logits.shape == (3, 1)
+    assert torch.isfinite(q_logits).all()
+
+
+def test_torchscript_export_parity_and_latency_benchmark(tmp_path):
+    """Verify TorchScript export numerical parity (<1e-5) and latency benchmarking."""
+    from src.serving import export_to_torchscript, benchmark_inference_latency
+
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        tabular_feature_size=3,
+    )
+    model.eval()
+
+    ts_path = tmp_path / "ldm_model.torchscript.pt"
+    traced_mod, max_diff = export_to_torchscript(
+        model, save_path=str(ts_path), batch_size=1, seq_len=16
+    )
+    assert ts_path.exists()
+    assert max_diff < 1e-5
+
+    latency_stats = benchmark_inference_latency(
+        model, batch_size=1, seq_len=16, num_warmup=2, num_runs=10
+    )
+    assert latency_stats["torchscript_parity_max_diff"] < 1e-5
+    assert latency_stats["torchscript_p99_ms"] > 0.0
+    assert latency_stats["torchscript_throughput_rps"] > 0.0
+

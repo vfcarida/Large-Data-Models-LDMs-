@@ -316,7 +316,11 @@ class LDMFineTuningModule(pl.LightningModule):
         if getattr(self, "_trainer", None) is not None:
             self.log(name, value, **kwargs)
 
-    def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(
+        self,
+        batch: Dict[str, torch.Tensor],
+        update_memory: bool = False,
+    ) -> torch.Tensor:
         """Forward pass for binary classification."""
         return self.model(
             batch["packed_keys"],
@@ -324,11 +328,13 @@ class LDMFineTuningModule(pl.LightningModule):
             batch["packed_times"],
             tabular_features=batch.get("tabular"),
             key_padding_mask=batch.get("key_padding_mask"),
+            labels=batch.get("labels"),
+            update_memory=update_memory,
         )
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Executes a single supervised fine-tuning step."""
-        logits = self.forward(batch)
+        logits = self.forward(batch, update_memory=True)
         labels = batch["labels"].float().view(-1, 1)
 
         loss = F.binary_cross_entropy_with_logits(
@@ -475,6 +481,10 @@ class LDMFineTuningModule(pl.LightningModule):
         """
         encoder_params = list(self.model.encoder.parameters())
         head_params = list(self.model.fusion_head.parameters())
+        if self.model.relational_gnn is not None:
+            head_params.extend(list(self.model.relational_gnn.parameters()))
+        if self.model.tabr_retrieval is not None:
+            head_params.extend(list(self.model.tabr_retrieval.parameters()))
 
         param_groups = [
             {"params": encoder_params, "lr": self.learning_rate * 0.25},

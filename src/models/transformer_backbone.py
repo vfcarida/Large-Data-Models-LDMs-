@@ -118,7 +118,7 @@ class PeriodicNumericalEmbedding(nn.Module):
         Returns:
             Tensor of shape `[..., hidden_size]`.
         """
-        if x.dim() == 0 or x.shape[-1] != 1:
+        if x.dim() <= 2 and (torch.jit.is_tracing() or x.dim() == 0 or x.shape[-1] != 1):
             x_scalar = x.unsqueeze(-1)
         else:
             x_scalar = x
@@ -142,6 +142,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     def __init__(self, hidden_size: int, max_len: int = 4096):
         super().__init__()
+        self.max_len = max_len
         position = torch.arange(max_len, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, hidden_size, 2, dtype=torch.float32)
@@ -156,7 +157,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     def forward(self, seq_len: int) -> torch.Tensor:
         """Returns scaled positional encodings of shape `[1, seq_len, hidden_size]`."""
-        if seq_len <= self.pe.size(1):
+        if torch.jit.is_tracing() or seq_len <= self.max_len:
             return self.scale * self.pe[:, :seq_len, :]
         # Dynamically compute if sequence exceeds precomputed buffer
         device = self.pe.device

@@ -9,12 +9,20 @@
 #    using periodic numerical embeddings (PLR), sinusoidal sequence positional
 #    encoding, and additive KVT modality fusion.
 #
-# 2. EndToEndFusionLayer & CrossNetworkV2: DCNv2-based parallel fusion network
+# 2. RelationalEntityGNN & BipartiteGraphConvLayer: Bipartite user-merchant
+#    relational message passing (RelBench / Temporal GNN).
+#
+# 3. TabRRetrievalModule: Differentiable kNN retrieval-augmented behavioral
+#    attention over historical entity trajectories (TabR, ICLR 2024).
+#
+# 4. EndToEndFusionLayer & CrossNetworkV2: DCNv2-based parallel fusion network
 #    that combines dense Transformer sequence embeddings with classical static
 #    tabular features for downstream risk classification.
 #
-# 3. LargeDataModel: The unified model connecting the MMTT backbone, SSL
-#    multi-modal reconstruction heads, and DCNv2 fusion layer.
+# 5. InContextPFNHead: TabPFN v2 inspired In-Context Learning posterior
+#    approximation head for cold-start payment rails.
+#
+# 6. LargeDataModel: The unified model connecting all subsystems.
 # =============================================================================
 
 from src.models.transformer_backbone import (
@@ -24,6 +32,9 @@ from src.models.transformer_backbone import (
     VirtualTokenLayer,
 )
 from src.models.joint_fusion_network import EndToEndFusionLayer, CrossNetworkV2
+from src.models.retrieval_attention import TabRRetrievalModule
+from src.models.relational_gnn import RelationalEntityGNN, BipartiteGraphConvLayer
+from src.models.in_context_pfn import InContextPFNHead
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -33,5 +44,9 @@ __all__ = [
     "VirtualTokenLayer",
     "EndToEndFusionLayer",
     "CrossNetworkV2",
+    "TabRRetrievalModule",
+    "RelationalEntityGNN",
+    "BipartiteGraphConvLayer",
+    "InContextPFNHead",
     "LargeDataModel",
 ]

@@ -233,12 +233,30 @@ class BenchmarkSuite:
             "fgsm_degradation": float(clean_auc - adv_auc),
         }
 
+    def evaluate_serving_latency(self) -> Dict[str, Any]:
+        """
+        Benchmarks single-request (`batch_size=1`) TorchScript compilation,
+        numerical parity, and millisecond p50/p95/p99 authorization latency.
+        """
+        from src.serving.exporter import benchmark_inference_latency
+
+        logger.info(
+            "[Benchmark] Running TorchScript export & single-request SLA latency benchmark..."
+        )
+        return benchmark_inference_latency(
+            self.model,
+            batch_size=1,
+            seq_len=32,
+            num_warmup=5,
+            num_runs=30,
+        )
+
     def run_all(
         self,
         dataloader,
         val_dataloader: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Runs the complete classification, calibration, and robustness suite."""
+        """Runs the complete classification, calibration, robustness, and latency suite."""
         logger.info("=" * 60)
         logger.info("[Benchmark] Starting full evaluation suite")
         logger.info("=" * 60)
@@ -248,6 +266,8 @@ class BenchmarkSuite:
 
         if self.enable_robustness:
             results.update(self.evaluate_robustness(dataloader))
+
+        results.update(self.evaluate_serving_latency())
 
         logger.info("[Benchmark] Full suite completed.")
         return results

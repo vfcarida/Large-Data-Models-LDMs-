@@ -1,6 +1,6 @@
 # LDM Training & Governance Evaluation Report
 
-**Generated**: 2026-10-19 14:31:44
+**Generated**: 2026-10-19 15:21:22
 **Config**: small
 
 ---
@@ -30,45 +30,53 @@
 
 | Phase | Epochs | Learning Rate | Duration |
 |-------|--------|--------------|----------|
-| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 13.8s |
-| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 13.0s |
+| Pre-training (LimiX + PRAGMA + CoLES) | 3 | 0.001 | 20.2s |
+| Fine-tuning (DCNv2 Classification) | 8 | 0.002 | 20.1s |
 
 ## Test & Governance Evaluation Results
 
 | Metric | Value |
 |--------|-------|
-| test/loss | 1.4661 |
-| test/auc | 0.8491 |
-| test/pr_auc | 0.4314 |
-| test/f1 | 0.3333 |
+| test/loss | 2.7431 |
+| test/auc | 0.7951 |
+| test/pr_auc | 0.3712 |
+| test/f1 | 0.1333 |
 | test/recall_at_5pct_fpr | 0.1429 |
-| test/brier_score | 0.1531 |
-| test/ece | 0.1852 |
-| benchmark/auc | 0.8491 |
-| benchmark/pr_auc | 0.4314 |
-| benchmark/f1_score | 0.3333 |
+| test/brier_score | 0.1873 |
+| test/ece | 0.2032 |
+| benchmark/auc | 0.7951 |
+| benchmark/pr_auc | 0.3712 |
+| benchmark/f1_score | 0.1333 |
 | benchmark/recall_at_5pct_fpr | 0.1429 |
-| benchmark/brier_score | 0.1531 |
-| benchmark/ece | 0.1852 |
-| benchmark/precision | 0.2727 |
-| benchmark/recall | 0.4286 |
-| benchmark/specificity | 0.8491 |
-| benchmark/accuracy | 0.8000 |
-| benchmark/tp | 3 |
-| benchmark/fp | 8 |
-| benchmark/fn | 4 |
-| benchmark/tn | 45 |
-| benchmark/conformal_coverage | 0.8167 |
-| benchmark/conformal_abstention_rate | 0.1833 |
-| benchmark/conformal_selective_accuracy | 0.8776 |
-| benchmark/conformal_selective_f1 | 0.2500 |
-| benchmark/conformal_lower_threshold | 0.1348 |
-| benchmark/conformal_upper_threshold | 0.8460 |
-| benchmark/clean_auc | 0.8491 |
-| benchmark/random_shift_auc | 0.8464 |
-| benchmark/fgsm_auc | 0.8275 |
-| benchmark/random_degradation | 0.0027 |
-| benchmark/fgsm_degradation | 0.0216 |
+| benchmark/brier_score | 0.1873 |
+| benchmark/ece | 0.2032 |
+| benchmark/precision | 0.1250 |
+| benchmark/recall | 0.1429 |
+| benchmark/specificity | 0.8679 |
+| benchmark/accuracy | 0.7833 |
+| benchmark/tp | 1 |
+| benchmark/fp | 7 |
+| benchmark/fn | 6 |
+| benchmark/tn | 46 |
+| benchmark/conformal_coverage | 0.8667 |
+| benchmark/conformal_abstention_rate | 0.1333 |
+| benchmark/conformal_selective_accuracy | 0.8654 |
+| benchmark/conformal_selective_f1 | 0.2222 |
+| benchmark/conformal_lower_threshold | 0.0500 |
+| benchmark/conformal_upper_threshold | 0.9500 |
+| benchmark/clean_auc | 0.7951 |
+| benchmark/random_shift_auc | 0.7951 |
+| benchmark/fgsm_auc | 0.7790 |
+| benchmark/random_degradation | 0.0000 |
+| benchmark/fgsm_degradation | 0.0162 |
+| benchmark/eager_p50_ms | 11.3774 |
+| benchmark/eager_p95_ms | 45.9450 |
+| benchmark/eager_p99_ms | 53.0627 |
+| benchmark/torchscript_p50_ms | 3.8520 |
+| benchmark/torchscript_p95_ms | 6.1546 |
+| benchmark/torchscript_p99_ms | 7.3145 |
+| benchmark/torchscript_throughput_rps | 255.1828 |
+| benchmark/torchscript_parity_max_diff | 0.0000 |
 
 ---
 
