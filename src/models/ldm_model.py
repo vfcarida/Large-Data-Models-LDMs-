@@ -68,6 +68,9 @@ from src.models.multi_task_moe import MultiGateMixtureOfExpertsHead
 from src.models.causal_uplift import CausalDragonNetHead
 from src.models.hypergraph_contagion import TemporalHypergraphContagionModule
 from src.models.flow_matching import ConditionalTrajectoryFlowMatcher
+from src.models.hawkes_point_process import NeuralHawkesProcessHead
+from src.models.cross_border_alignment import CrossBorderDomainAligner
+from src.models.monotonic_constraints import MonotonicConstrainedHead
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,24 @@ class LargeDataModel(nn.Module):
             latent_dim=hidden_size + tabular_feature_size,
             hidden_dim=hidden_size * 2,
             num_classes=2,
+        )
+
+        # 11. Horizon Track 8: Self-Exciting Neural Hawkes Point Process (THP)
+        self.hawkes_head = NeuralHawkesProcessHead(
+            hidden_dim=hidden_size,
+            num_event_types=vocab_size,
+        )
+
+        # 12. Horizon Track 9: Multi-Currency Cross-Border Domain Aligner (Deep CORAL)
+        self.cross_border_aligner = CrossBorderDomainAligner(
+            embed_dim=hidden_size,
+            num_currencies=8,
+        )
+
+        # 13. Horizon Track 10: Certified Partially Monotonic Risk Head (SR 11-7)
+        self.monotonic_head = MonotonicConstrainedHead(
+            input_dim=hidden_size + tabular_feature_size,
+            hidden_dim=hidden_size,
         )
 
         total_params = sum(p.numel() for p in self.parameters())
@@ -698,6 +719,94 @@ class LargeDataModel(nn.Module):
             "fraud_logits": syn_logits,
             "fraud_probs": torch.sigmoid(syn_logits),
         }
+
+    def forward_hawkes_intensity(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Computes continuous-time self-exciting Neural Hawkes hazard intensities,
+        `branching_ratio`, and `expected_next_delta_t` over the event sequence.
+        """
+        full_seq = self.encode(
+            packed_keys=packed_keys,
+            packed_values=packed_values,
+            packed_times=packed_times,
+            key_padding_mask=key_padding_mask,
+        )
+        num_v = self.encoder.num_virtual_tokens if self.encoder.use_virtual_tokens else 0
+        token_emb = full_seq[:, num_v:, :]
+        return self.hawkes_head(
+            token_embeddings=token_emb,
+            delta_times=packed_times,
+            key_padding_mask=key_padding_mask,
+        )
+
+    def forward_cross_border_aligned(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        currency_ids: torch.Tensor,
+        tabular_features: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Normalizes multi-currency transaction values via FX/PPP scaling and
+        produces jurisdiction-invariant entity embeddings and risk logits.
+        """
+        ppp_values = self.cross_border_aligner.fx_normalizer(
+            nominal_values=packed_values,
+            currency_ids=currency_ids,
+            key_padding_mask=key_padding_mask,
+        )
+        enriched = self.get_enriched_representation(
+            packed_keys=packed_keys,
+            packed_values=ppp_values,
+            packed_times=packed_times,
+            key_padding_mask=key_padding_mask,
+            update_memory=False,
+        )
+        aligned_emb = self.cross_border_aligner(enriched, currency_ids)
+
+        if tabular_features is None:
+            tabular_features = torch.zeros(
+                aligned_emb.size(0),
+                self.tabular_feature_size,
+                device=aligned_emb.device,
+                dtype=aligned_emb.dtype,
+            )
+        logits = self.fusion_head(aligned_emb, tabular_features)
+        return {
+            "ppp_values": ppp_values,
+            "aligned_embeddings": aligned_emb,
+            "fraud_logits": logits,
+        }
+
+    def forward_monotonic_risk(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        tabular_features: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Computes partially monotonic risk logits `[B, 1]` guaranteed to respect
+        the configured sign constraints on static tabular covariates.
+        """
+        enriched = self.get_enriched_representation(
+            packed_keys=packed_keys,
+            packed_values=packed_values,
+            packed_times=packed_times,
+            key_padding_mask=key_padding_mask,
+            update_memory=False,
+        )
+        joint = torch.cat([enriched, tabular_features], dim=-1)
+        return self.monotonic_head(joint)
 
     def freeze_encoder(self) -> None:
         """Freezes the Transformer encoder parameters during linear/head probing."""

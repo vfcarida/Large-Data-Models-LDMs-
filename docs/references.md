@@ -64,12 +64,60 @@ All architectural components, self-supervised objectives, numerical embeddings, 
 * **LoRA — Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., & Chen, W. (2022).**
   *LoRA: Low-Rank Adaptation of Large Language Models.* **ICLR 2022**, `arXiv:2106.09685`
   * **Relevance:** Anchors `inject_lora_adaptation` for rapid post-deployment adaptation under strategic shift.
+* **DoRA — Liu, S.-Y., Wang, C.-Y., Yin, H., Molchanov, P., Wang, Y.-C. F., Cheng, K.-T., & Chen, M.-H. (2024).**
+  *DoRA: Weight-Decomposed Low-Rank Adaptation.* **ICML 2024**, `arXiv:2402.09353`
+  * **Relevance:** Anchors `DoRALinear` and `inject_dora_adaptation`, decoupling weight magnitude from directional low-rank updates.
+* **QLoRA / NF4 — Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023).**
+  *QLoRA: Efficient Finetuning of Quantized LLMs.* **NeurIPS 2023**, `arXiv:2305.14314`
+  * **Relevance:** Anchors `NF4QuantizedLinear` and `quantize_ldm_nf4` for 4-bit NormalFloat quantization of frozen LDM backbones.
 
 ---
 
-## 4. Enterprise Risk & Regulatory Governance Frameworks
+## 4. Continuous-Time Generative Dynamics, Point Processes & Continual Learning
+
+* **Flow Matching — Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., & Le, M. (2023).**
+  *Flow Matching for Generative Modeling.* **ICLR 2023**, `arXiv:2210.02747`
+  * **Relevance:** Anchors `ConditionalFlowMatchingHead` for continuous-time ODE velocity field forecasting and counterfactual trajectory generation.
+* **Neural Hawkes Process — Mei, H., & Eisner, J. M. (2017).**
+  *The Neural Hawkes Process: A Neurally Self-Modulating Multivariate Point Process.* **NeurIPS 2017**, `arXiv:1612.09328`
+  * **Relevance:** Anchors `NeuralHawkesProcessHead` for self-exciting continuous-time hazard intensity $\lambda^*(t \mid \mathcal{H}_t)$ and bursty botnet velocity scoring.
+* **Transformer Hawkes Process — Zuo, S., Jiang, H., Li, Z., Zhao, T., & Zha, H. (2020).**
+  *Transformer Hawkes Process.* **ICML 2020**, `arXiv:2002.09291`
+  * **Relevance:** Anchors attention-conditioned temporal point process intensity parameterization on MMTT trajectory states.
+* **Elastic Weight Consolidation (EWC) — Kirkpatrick, J., Pascanu, R., Rabinowitz, N., Veness, J., Desjardins, G., et al. (2017).**
+  *Overcoming catastrophic forgetting in neural networks.* **PNAS**, 114(13), 3521–3526, `arXiv:1612.00796`
+  * **Relevance:** Anchors `ContinualLdmTrainer` quadratic Fisher Information regularization across non-stationary fraud regimes.
+* **Dark Experience Replay (DER++) — Buzzega, P., Boschini, M., Porrello, A., Abati, D., & Calderara, S. (2020).**
+  *Dark Experience for General Continual Learning: a Strong, Simple Baseline.* **NeurIPS 2020**, `arXiv:2004.07211`
+  * **Relevance:** Anchors `ReservoirDarkReplayBuffer` for bounded-memory dark logit distillation.
+
+---
+
+## 5. Cross-Border Domain Alignment, Certified Monotonicity & Contextual Bandits
+
+* **Deep CORAL — Sun, B., & Saenko, K. (2016).**
+  *Deep CORAL: Correlation Alignment for Deep Domain Adaptation.* **ECCV 2016**, `arXiv:1607.01719`
+  * **Relevance:** Anchors `CrossBorderDomainAligner` and `FXPurchasingPowerNormalizer` for cross-border multi-currency representation invariance.
+* **Deep Lattice & Partial Monotonic Networks — You, S., Ding, D., Canini, K., Pfeifer, J., & Gupta, M. (2017).**
+  *Deep Lattice Networks and Partial Monotonic Functions.* **NeurIPS 2017**, `arXiv:1709.06680`
+  * **Relevance:** Anchors `MonotonicConstrainedHead` and `MonotonicityCertificationAuditor` for zero-violation partial monotonicity under SR 11-7 / ECOA.
+* **Constrained Monotonic Neural Networks — Runje, D., & Shankaranarayana, S. M. (2023).**
+  *Constrained Monotonic Neural Networks.* **ICML 2023**, `arXiv:2205.11775`
+  * **Relevance:** Anchors non-negative weight projection (`softplus`) and monotone hidden activations for certified risk heads.
+* **LinUCB — Li, L., Chu, W., Langford, J., & Schapire, R. E. (2010).**
+  *A Contextual-Bandit Approach to Personalized News Article Recommendation.* **WWW 2010**, `arXiv:1003.0146`
+  * **Relevance:** Anchors `NeuralLinUCBRouter` for upper-confidence-bound multi-action transaction routing with Sherman-Morrison online updates.
+* **Doubly Robust Off-Policy Evaluation (DR-OPE) — Dudík, M., Langford, J., & Li, L. (2011).**
+  *Doubly Robust Policy Evaluation and Learning.* **ICML 2011**, `arXiv:1103.4601`
+  * **Relevance:** Anchors `DoublyRobustOffPolicyEvaluator` for unbiased counterfactual policy value estimation prior to production rollout.
+
+---
+
+## 6. Enterprise Risk & Regulatory Governance Frameworks
 
 * **Board of Governors of the Federal Reserve System & OCC (2011 / 2026).** *SR 11-7: Guidance on Model Risk Management* & *SR 26-2 Interagency AI Risk Guidance*.
 * **Gartner (2024–2026).** *AI TRiSM (AI Trust, Risk, and Security Management)* — Runtime inspection, epistemic abstention guardrails, and adversarial resilience.
 * **Boston Consulting Group (BCG, 2024–2026).** *AI at Scale in Financial Services ("Risk-First, Value-Fast")* — Operational false-positive budget governance (`Recall@FPR`).
 * **McKinsey & Company / QuantumBlack (2024–2026).** *Next-Generation Financial Crime & Hybrid Foundation Risk Modeling*.
+* **RFC 6962 — Laurie, B., Langley, A., & Kasper, E. (2013).** *Certificate Transparency* — Anchors `CryptographicAuditLedger` SHA-256 hash-chain and Merkle root verification.
+

@@ -53,6 +53,16 @@ from src.models.flow_matching import (
     ConditionalTrajectoryFlowMatcher,
     SinusoidalFlowTimeEmbedding,
 )
+from src.models.hawkes_point_process import NeuralHawkesProcessHead
+from src.models.cross_border_alignment import (
+    FXPurchasingPowerNormalizer,
+    CrossBorderDomainAligner,
+)
+from src.models.monotonic_constraints import (
+    MonotonicConstrainedHead,
+    MonotonicityCertificationAuditor,
+    MonotonicityAuditReport,
+)
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -77,5 +87,11 @@ __all__ = [
     "TemporalHypergraphContagionModule",
     "ConditionalTrajectoryFlowMatcher",
     "SinusoidalFlowTimeEmbedding",
+    "NeuralHawkesProcessHead",
+    "FXPurchasingPowerNormalizer",
+    "CrossBorderDomainAligner",
+    "MonotonicConstrainedHead",
+    "MonotonicityCertificationAuditor",
+    "MonotonicityAuditReport",
     "LargeDataModel",
 ]

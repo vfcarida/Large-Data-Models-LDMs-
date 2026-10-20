@@ -25,6 +25,12 @@ from src.serving.peft_and_nf4 import (
     merge_lora_adapters,
     quantize_ldm_nf4,
 )
+from src.serving.contextual_bandit import (
+    BanditActionDecision,
+    NeuralLinUCBRouter,
+    OffPolicyEvaluationReport,
+    DoublyRobustOffPolicyEvaluator,
+)
 
 __all__ = [
     "LDMInferenceWrapper",
@@ -42,4 +48,8 @@ __all__ = [
     "inject_lora_adapters",
     "merge_lora_adapters",
     "quantize_ldm_nf4",
+    "BanditActionDecision",
+    "NeuralLinUCBRouter",
+    "OffPolicyEvaluationReport",
+    "DoublyRobustOffPolicyEvaluator",
 ]

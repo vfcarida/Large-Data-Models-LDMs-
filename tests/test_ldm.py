@@ -1237,3 +1237,194 @@ def test_tamper_evident_audit_ledger_and_logit_watermarking():
     assert det_res["is_watermarked"]
     assert det_res["z_score"] >= 7.5
     assert det_res["max_prob_shift"] < 1e-4
+
+
+def test_neural_hawkes_point_process_intensity_and_nll():
+    """Verify NeuralHawkesProcessHead conditional intensity, branching_ratio, padding invariance, and NLL."""
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        tabular_feature_size=3,
+    )
+    model.eval()
+
+    keys = torch.randint(1, 12, (4, 6))
+    values = torch.randn(4, 6).abs()
+    times = torch.randint(0, 8, (4, 6))
+    pad_mask = torch.zeros(4, 6, dtype=torch.bool)
+    pad_mask[0, 4:] = True
+
+    out = model.forward_hawkes_intensity(
+        packed_keys=keys,
+        packed_values=values,
+        packed_times=times,
+        key_padding_mask=pad_mask,
+    )
+    assert out["conditional_intensity"].shape == (4, 6)
+    assert torch.all(out["conditional_intensity"][0, 4:] == 0.0)
+    assert torch.all(out["conditional_intensity"][0, :4] > 0.0)
+    assert out["branching_ratio"].shape == (4, 1)
+    assert torch.all((out["branching_ratio"] > 0.0) & (out["branching_ratio"] < 1.0))
+    assert out["expected_next_delta_t"].shape == (4, 1)
+    assert torch.all(out["expected_next_delta_t"] > 0.0)
+    assert out["next_mark_logits"].shape == (4, 12)
+
+    # Verify point-process NLL backward pass
+    full_seq = model.encode(keys, values, times, key_padding_mask=pad_mask)
+    token_emb = full_seq[:, model.encoder.num_virtual_tokens :, :]
+    nll_dict = model.hawkes_head.compute_point_process_nll(
+        token_emb, times, key_padding_mask=pad_mask
+    )
+    assert nll_dict["loss"].requires_grad
+    nll_dict["loss"].backward()
+
+
+def test_cross_border_fx_normalizer_and_deep_coral_alignment():
+    """Verify FXPurchasingPowerNormalizer and CrossBorderDomainAligner Deep CORAL domain adaptation."""
+    torch.manual_seed(42)
+    model = LargeDataModel(
+        vocab_size=12,
+        hidden_size=16,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        tabular_feature_size=3,
+    )
+
+    keys = torch.randint(1, 12, (8, 6))
+    # Simulate 4 USD users (currency 0) and 4 JPY users (currency 4 with ~150x nominal scale)
+    usd_vals = torch.full((4, 6), 50.0)
+    jpy_vals = torch.full((4, 6), 7500.0)
+    values = torch.cat([usd_vals, jpy_vals], dim=0)
+    times = torch.randint(0, 5, (8, 6))
+    currencies = torch.tensor([0, 0, 0, 0, 4, 4, 4, 4], dtype=torch.long)
+    tab = torch.randn(8, 3)
+
+    cb_out = model.forward_cross_border_aligned(
+        packed_keys=keys,
+        packed_values=values,
+        packed_times=times,
+        currency_ids=currencies,
+        tabular_features=tab,
+    )
+    assert cb_out["ppp_values"].shape == (8, 6)
+    assert cb_out["aligned_embeddings"].shape == (8, 16)
+    assert cb_out["fraud_logits"].shape == (8, 1)
+    # 50 USD and 7500 JPY (~50.25 USD) should normalize to nearly identical PPP log values
+    assert torch.allclose(cb_out["ppp_values"][:4], cb_out["ppp_values"][4:], atol=0.05)
+
+    # Verify Deep CORAL alignment loss reduces domain discrepancy
+    src_emb = cb_out["aligned_embeddings"][:4]
+    tgt_emb = cb_out["aligned_embeddings"][4:] + 1.5
+    align_loss_dict = model.cross_border_aligner.compute_alignment_loss(
+        src_emb, tgt_emb, currencies[:4], currencies[4:]
+    )
+    assert align_loss_dict["loss"].requires_grad
+    assert float(align_loss_dict["coral_loss"].item()) >= 0.0
+    assert float(align_loss_dict["centroid_loss"].item()) > 0.0
+    align_loss_dict["loss"].backward()
+
+
+def test_certified_partially_monotonic_risk_head_and_auditor():
+    """Verify MonotonicConstrainedHead guarantees 0.0000 monotonicity violation rate across R^D."""
+    from src.models.monotonic_constraints import (
+        MonotonicConstrainedHead,
+        MonotonicityCertificationAuditor,
+    )
+
+    torch.manual_seed(42)
+    # 6 features: first 3 unconstrained (0), feature 3 increasing (+1), feature 4 decreasing (-1), feature 5 increasing (+1)
+    head = MonotonicConstrainedHead(
+        input_dim=6,
+        monotonicity_signs=[0, 0, 0, +1, -1, +1],
+        hidden_dim=24,
+    )
+    auditor = MonotonicityCertificationAuditor(tolerance=1e-6)
+
+    ref_inputs = torch.randn(32, 6)
+    report = auditor.certify(head, ref_inputs, delta_grid=(0.05, 0.25, 1.0, 3.0))
+    assert report.num_constrained_features == 3
+    assert report.total_counterfactual_pairs == 32 * 3 * 4
+    assert report.num_violations == 0
+    assert report.violation_rate == 0.0
+    assert report.is_certified_monotonic
+
+    # Verify LargeDataModel.forward_monotonic_risk integration
+    model = LargeDataModel(
+        vocab_size=10,
+        hidden_size=8,
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        tabular_feature_size=3,
+    )
+    model.eval()
+    keys = torch.randint(1, 10, (4, 5))
+    vals = torch.randn(4, 5)
+    times = torch.randint(0, 5, (4, 5))
+    tab_base = torch.randn(4, 3)
+
+    # Last 2 tabular features have default signs (+1, -1)
+    tab_inc_debt = tab_base.clone()
+    tab_inc_debt[:, 1] += 2.0  # s = +1 -> risk must increase
+    tab_inc_income = tab_base.clone()
+    tab_inc_income[:, 2] += 2.0  # s = -1 -> risk must decrease
+
+    with torch.no_grad():
+        r_base = model.forward_monotonic_risk(keys, vals, times, tab_base)
+        r_debt = model.forward_monotonic_risk(keys, vals, times, tab_inc_debt)
+        r_income = model.forward_monotonic_risk(keys, vals, times, tab_inc_income)
+
+    assert torch.all(r_debt >= r_base - 1e-6)
+    assert torch.all(r_income <= r_base + 1e-6)
+
+
+def test_neural_linucb_bandit_router_and_doubly_robust_ope():
+    """Verify NeuralLinUCBRouter Sherman-Morrison updates and DoublyRobustOffPolicyEvaluator (DR-OPE)."""
+    from src.serving.contextual_bandit import (
+        DoublyRobustOffPolicyEvaluator,
+        NeuralLinUCBRouter,
+    )
+
+    torch.manual_seed(42)
+    router = NeuralLinUCBRouter(context_dim=12, alpha_ucb=0.40, ridge_lambda=1.0)
+    contexts = torch.randn(16, 12) * 0.25 + 1.0
+
+    initial_decisions = router.select_actions(contexts)
+    assert len(initial_decisions) == 16
+    assert all(d.ucb_uncertainty > 0.0 for d in initial_decisions)
+
+    # Reward arm 2 ("BIOMETRIC_3DS") strongly on these contexts
+    chosen_arms = torch.full((16,), 2, dtype=torch.long)
+    rewards = torch.ones(16, dtype=torch.float32) * 2.5
+    router.update(contexts, chosen_arms, rewards)
+    assert router.action_counts[2] == 16
+
+    updated_decisions = router.select_actions(contexts)
+    # After positive reward updates on arm 2, expected reward for arm 2 must increase
+    assert all(d.action_index == 2 for d in updated_decisions)
+    assert all(d.expected_reward > 0.5 for d in updated_decisions)
+
+    # Verify Doubly Robust Off-Policy Evaluation (DR-OPE)
+    ope = DoublyRobustOffPolicyEvaluator(min_propensity_clip=0.05)
+    logged_actions = torch.randint(0, 4, (40,))
+    logged_rewards = torch.randn(40) + 1.0
+    logging_props = torch.full((40,), 0.25)
+    target_actions = torch.full((40,), 2, dtype=torch.long)
+    r_hat_matrix = router.predict_expected_rewards(torch.randn(40, 12))
+
+    ope_report = ope.evaluate_policy(
+        logged_actions=logged_actions,
+        logged_rewards=logged_rewards,
+        logging_propensities=logging_props,
+        target_policy_actions=target_actions,
+        estimated_reward_matrix=r_hat_matrix,
+    )
+    assert ope_report.num_logged_samples == 40
+    assert ope_report.dr_ci95_lower <= ope_report.doubly_robust_value <= ope_report.dr_ci95_upper
+    assert ope_report.effective_sample_size_pct > 0.0
+
