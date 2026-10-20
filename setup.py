@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ldm-research-lab",
-    version="0.9.0",
+    version="1.0.0",
     description="Large Data Models (LDMs) — Self-Supervised Foundation Models for Structured & Transactional Data",
     author="Vinicius Caridá",
     author_email="vfcarida@gmail.com",

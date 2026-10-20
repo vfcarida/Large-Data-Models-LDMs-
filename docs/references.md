@@ -122,6 +122,21 @@ All architectural components, self-supervised objectives, numerical embeddings, 
 * **Randomized Smoothing — Cohen, J., Rosenfeld, E., & Kolter, Z. (2019).**
   *Certified Adversarial Robustness via Randomized Smoothing.* **ICML 2019**, `arXiv:1902.02918`
   * **Relevance:** Anchors `RandomizedSmoothingCertifier` and `clopper_pearson_lower_bound` for provable $\ell_2$ adversarial radius certificates.
+* **Adversarial Classification — Dalvi, N., Domingos, P., Mausam, Sanghai, S., & Verma, D. (2004).**
+  *Adversarial Classification.* **KDD 2004**.
+  * **Relevance:** Anchors `CostAwareStackelbergRedTeam` asymmetric feature manipulation costs ($c_j$) and rational adversary utility maximization.
+* **Stackelberg Prediction Games — Brückner, M., Kanzow, C., & Scheffer, T. (2012).**
+  *Static Prediction Games for Adversarial Learning Problems.* **JMLR**, 13, 2617–2654.
+  * **Relevance:** Anchors `CostAwareStackelbergRedTeam` bilevel Leader-Follower Stackelberg equilibrium thresholding and minimax hardening loss.
+* **Strategic Classification — Hardt, M., Megiddo, N., Papadimitriou, C., & Wootters, M. (2016).**
+  *Strategic Classification.* **ITCS 2016**, `arXiv:1506.06980`
+  * **Relevance:** Anchors economic break-even evasion analysis (`break_even_rate`) under heterogeneous manipulation cost constraints.
+* **Delegating Computation / Verifiable Proofs — Goldwasser, S., Kalai, Y. T., & Rothblum, G. N. (2015).**
+  *Delegating Computation: Interactive Proofs for Muggles.* **Journal of the ACM (JACM)**, 62(4), Article 27.
+  * **Relevance:** Anchors `VerifiableLDMCommitmentEngine` layer-by-layer execution trace verification and cryptographic soundness for delegated inference.
+* **ZKML Verifiable Inference — Kang, D., Hashimoto, T., Stoica, I., & Sun, Y. (2022).**
+  *Scaling up Trustless DNN Inference with Zero-Knowledge Proofs.* **arXiv:2210.08674 / PVLDB**.
+  * **Relevance:** Anchors `VerifiableLDMCommitmentEngine` and `VerifiableInferenceReceipt` binding model weight Merkle roots ($\mathcal{R}_W$), blinded input commitments ($\mathcal{C}_{\text{in}}$), and forward-hook intermediate activation trace Merkle roots ($\mathcal{R}_H$).
 
 ---
 
@@ -131,6 +146,4 @@ All architectural components, self-supervised objectives, numerical embeddings, 
 * **Gartner (2024–2026).** *AI TRiSM (AI Trust, Risk, and Security Management)* — Runtime inspection, epistemic abstention guardrails, and adversarial resilience.
 * **Boston Consulting Group (BCG, 2024–2026).** *AI at Scale in Financial Services ("Risk-First, Value-Fast")* — Operational false-positive budget governance (`Recall@FPR`).
 * **McKinsey & Company / QuantumBlack (2024–2026).** *Next-Generation Financial Crime & Hybrid Foundation Risk Modeling*.
-* **RFC 6962 — Laurie, B., Langley, A., & Kasper, E. (2013).** *Certificate Transparency* — Anchors `CryptographicAuditLedger` SHA-256 hash-chain and Merkle root verification.
-
-
+* **RFC 6962 — Laurie, B., Langley, A., & Kasper, E. (2013).** *Certificate Transparency* — Anchors `CryptographicAuditLedger` and `VerifiableLDMCommitmentEngine` SHA-256 hash-chain and Merkle root verification.

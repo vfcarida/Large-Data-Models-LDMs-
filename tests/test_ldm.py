@@ -1604,3 +1604,124 @@ def test_randomized_smoothing_certified_l2_robustness():
     assert all(pred == 1 for pred in report.smoothed_predictions)
 
 
+def test_cost_aware_stackelberg_red_team_and_minimax_equilibrium():
+    """Verify CostAwareStackelbergRedTeam asymmetric cost gating, equilibrium threshold, and minimax loss."""
+    from src.evaluation.stackelberg_red_team import CostAwareStackelbergRedTeam
+
+    torch.manual_seed(42)
+    ldm = LargeDataModel(
+        vocab_size=12, hidden_size=16, num_layers=1, num_heads=4, tabular_feature_size=6
+    )
+
+    # First 3 tabular features are cheap (0.01), last 3 are immutable/expensive (500.0)
+    cost_weights = torch.tensor([0.01, 0.01, 0.01, 500.0, 500.0, 500.0])
+    red_team = CostAwareStackelbergRedTeam(
+        epsilon_max=0.40,
+        pgd_steps=5,
+        step_size=0.10,
+        value_manipulation_cost=0.05,
+        tabular_cost_weights=cost_weights,
+    )
+
+    keys = torch.randint(1, 12, (6, 5))
+    vals = torch.rand(6, 5) * 40.0 + 5.0
+    times = torch.randint(1, 10, (6, 5))
+    tab = torch.randn(6, 6)
+    labels = torch.ones(6)
+
+    adv_vals, adv_tab, _, _ = red_team.compute_attacker_best_response(
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals,
+        packed_times=times,
+        tabular_features=tab,
+    )
+    # Prohibitive-cost features (indices 3, 4, 5) must remain unperturbed
+    assert torch.allclose(adv_tab[:, 3:], tab[:, 3:], atol=1e-6)
+    assert (adv_vals >= 0.0).all()
+
+    eq_report = red_team.evaluate_stackelberg_equilibrium(
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals,
+        packed_times=times,
+        tabular_features=tab,
+    )
+    assert eq_report.num_attacked_samples == 6
+    assert (
+        eq_report.stackelberg_hardened_detection_rate
+        >= eq_report.post_attack_detection_rate
+    )
+
+    minimax_loss = red_team.compute_stackelberg_minimax_loss(
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals,
+        packed_times=times,
+        tabular_features=tab,
+        labels=labels,
+    )
+    assert minimax_loss.requires_grad
+    assert minimax_loss.item() > 0.0
+
+
+def test_verifiable_ldm_commitment_engine_merkle_trace_and_tamper_detection():
+    """Verify VerifiableLDMCommitmentEngine Merkle weight/trace commitments and tamper detection."""
+    import dataclasses
+    from src.serving.verifiable_commitment import VerifiableLDMCommitmentEngine
+
+    torch.manual_seed(42)
+    ldm = LargeDataModel(
+        vocab_size=12, hidden_size=16, num_layers=1, num_heads=4, tabular_feature_size=6, dropout=0.0
+    )
+    engine = VerifiableLDMCommitmentEngine(
+        signing_secret="unit-test-zk-secret",
+        decision_threshold=0.50,
+    )
+
+    keys = torch.randint(1, 12, (4, 5))
+    vals = torch.rand(4, 5) * 30.0
+    times = torch.randint(1, 10, (4, 5))
+    tab = torch.randn(4, 6)
+
+    receipt = engine.prove_inference(
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals,
+        packed_times=times,
+        tabular_features=tab,
+    )
+    assert len(receipt.weight_merkle_root) == 64
+    assert len(receipt.trace_merkle_root) == 64
+    assert engine.verify_receipt(
+        receipt=receipt,
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals,
+        packed_times=times,
+        tabular_features=tab,
+    )
+
+    # 1. Tampering with a decision bit invalidates HMAC signature
+    forged_receipt = dataclasses.replace(
+        receipt, decisions=[1 - d for d in receipt.decisions]
+    )
+    assert not engine.verify_receipt(forged_receipt, model=ldm)
+
+    # 2. Tampering with input values invalidates input & trace commitments
+    assert not engine.verify_receipt(
+        receipt=receipt,
+        model=ldm,
+        packed_keys=keys,
+        packed_values=vals + 5.0,
+        packed_times=times,
+        tabular_features=tab,
+    )
+
+    # 3. Mutating a single model parameter invalidates weight_merkle_root
+    with torch.no_grad():
+        ldm.fusion_head.final_projection.bias.add_(0.05)
+    assert not engine.verify_receipt(receipt, model=ldm)
+
+
+

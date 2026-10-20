@@ -31,6 +31,10 @@ from src.serving.contextual_bandit import (
     OffPolicyEvaluationReport,
     DoublyRobustOffPolicyEvaluator,
 )
+from src.serving.verifiable_commitment import (
+    VerifiableInferenceReceipt,
+    VerifiableLDMCommitmentEngine,
+)
 
 __all__ = [
     "LDMInferenceWrapper",
@@ -52,4 +56,6 @@ __all__ = [
     "NeuralLinUCBRouter",
     "OffPolicyEvaluationReport",
     "DoublyRobustOffPolicyEvaluator",
+    "VerifiableInferenceReceipt",
+    "VerifiableLDMCommitmentEngine",
 ]

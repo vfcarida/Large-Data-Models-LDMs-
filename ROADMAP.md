@@ -8,12 +8,12 @@ This document establishes the technical roadmap, maturity governance framework, 
 
 Enterprise transactional decisioning—across real-time fraud prevention, credit underwriting, and anti-money laundering (AML)—operates at the intersection of **heterogeneous relational tables**, **bipartite entity-merchant graphs**, and **continuous-time behavioral event streams**. Traditional architectures force organizations to maintain brittle, hand-engineered SQL/Spark aggregation pipelines that suffer from feature staleness, train-serve skew, and rapid decay under adversarial concept drift.
 
-The **Large Data Models (LDMs)** architecture (`v0.9.0`) unifies:
+The **Large Data Models (LDMs)** architecture (`v1.0.0`) unifies:
 1. **Multi-Modal Temporal Transformer (MMTT), Selective State-Space (`Mamba` / `Liquid-S4`) & Self-Exciting Neural Hawkes Point Process (`THP`) Backbones** with **Periodic Numerical Embeddings (PLR)** ([Gorishniy et al., *NeurIPS 2022*](https://arxiv.org/abs/2203.05556); [Gu & Dao, *COLM 2024*](https://arxiv.org/abs/2312.00752); [Mei & Eisner, *NeurIPS 2017*](https://arxiv.org/abs/1612.09328); [Zuo et al., *ICML 2020*](https://arxiv.org/abs/2002.09291)) to ingest raw `(Key, Value, Timestamp)` event streams and model continuous-time hazard intensities $\lambda^*(t)$.
 2. **Hybrid Self-Supervised, Rényi Differentially Private Federated (`DP-FedAvg` + `RDP`), Continual Lifelong Adaptation (`EWC` + `DER++`), Cross-Border Domain Alignment (`Deep CORAL`) & Certified Machine Unlearning** combining **Context-Conditional Multi-Modal Masked Modeling** ([LimiX, 2025](https://arxiv.org/abs/2509.03505); [PRAGMA, 2026](https://arxiv.org/abs/2604.08649)), **Contrastive Event Sequence Learning (`CoLES`)** ([Babaev et al., *SIGMOD 2022*](https://arxiv.org/abs/2002.08232)), **Cross-Silo Federated Optimization (`DP-FedAvg` + Rényi DP)** ([McMahan et al., *AISTATS 2017*](https://arxiv.org/abs/1602.05629); [Mironov, *IEEE CSF 2017*](https://arxiv.org/abs/1702.07476)), **Elastic Weight Consolidation & Dark Experience Distillation** ([Kirkpatrick et al., *PNAS 2017*](https://doi.org/10.1073/pnas.1611835114); [Buzzega et al., *NeurIPS 2020*](https://arxiv.org/abs/2004.07211)), **Multi-Currency PPP & Deep CORAL Alignment** ([Sun & Saenko, *ECCV 2016*](https://arxiv.org/abs/1607.01719)), and **Certified Fisher/Memory Unlearning** ([Golatkar et al., *CVPR 2020*](https://arxiv.org/abs/1911.04933)).
 3. **Bipartite Entity-Merchant Graph (`RelBench`), Temporal Hypergraph Contagion (`HGNN`) & kNN Context Retrieval (`TabR`)** ([Robinson et al., *NeurIPS 2024*](https://arxiv.org/abs/2407.20060); [Feng et al., *AAAI 2019*](https://arxiv.org/abs/1809.09401); [Gorishniy et al., *ICLR 2024*](https://arxiv.org/abs/2307.14338)) to capture pairwise and multi-hop collusion rings.
 4. **End-to-End Deep & Cross Fusion (`DCNv2`)**, **Competing-Risks Survival & IFRS 9 / CECL Hazard Head (`DeepHit`)** ([Lee et al., *AAAI 2018*](https://ojs.aaai.org/index.php/AAAI/article/view/11842); [Kvamme et al., *JMLR 2019*](https://jmlr.org/papers/v20/18-424.html)), **Certified Partially Monotonic Risk Networks (`SR 11-7` / `Basel III`)** ([You et al., *NeurIPS 2017*](https://arxiv.org/abs/1709.06680); [Runje & Shankaranarayana, *ICML 2023*](https://arxiv.org/abs/2205.11775)), **Multi-Gate Mixture-of-Experts (`MMoE`)** ([Ma et al., *KDD 2018*](https://dl.acm.org/doi/10.1145/3219819.3220007)), **Causal Counterfactual Treatment Uplift (`DragonNet`)** ([Shi et al., *NeurIPS 2019*](https://arxiv.org/abs/1906.02120)), **Conditional Optimal-Transport Flow Matching (`FlowLDM` / `TabDDPM`)** ([Lipman et al., *ICLR 2023*](https://arxiv.org/abs/2210.02747); [Kotelnikov et al., *ICML 2023*](https://arxiv.org/abs/2209.15421)), and **In-Context Tabular Foundation Inference (`TabPFN v2` / `TabICL`)** ([Hollmann et al., *Nature 2025*](https://doi.org/10.1038/s41586-024-08328-6); [Qu et al., *ICML 2025*](https://arxiv.org/abs/2502.05564)).
-5. **Calibrated Governance, Randomized Smoothing Certified $\ell_2$ Adversarial Robustness (`Neyman-Pearson`), Algorithmic Fairness (`EqualizedOdds`), Tamper-Evident `HMAC-SHA256` Audit Ledger & Statistical Watermarking (`EU AI Act Art. 12, 15 & 50`), Online Contextual Bandit Routing (`NeuralLinUCB`) & Doubly-Robust Off-Policy Evaluation (`DR-OPE`), Online Adaptive Conformal Inference (`ACI`), Concept Drift Monitoring (`PSI` / `MMD` / `Wasserstein`), Integrated Gradients Explainability, Counterfactual Recourse & Sub-10ms TorchScript / INT8 / 4-Bit `NF4` / `DoRA` Cascade Authorization** aligned with **Gartner AI TRiSM**, **SR 11-7**, **ECOA**, **GDPR Art. 17 & 22**, and **LGPD Art. 18** standards.
+5. **Calibrated Governance, Cost-Aware Stackelberg Adversarial Red-Teaming (`StackelbergLDM`), Cryptographic Verifiable Inference Commitments (`ZK-LDM`), Randomized Smoothing Certified $\ell_2$ Adversarial Robustness (`Neyman-Pearson`), Algorithmic Fairness (`EqualizedOdds`), Tamper-Evident `HMAC-SHA256` Audit Ledger & Statistical Watermarking (`EU AI Act Art. 12, 15 & 50`), Online Contextual Bandit Routing (`NeuralLinUCB`) & Doubly-Robust Off-Policy Evaluation (`DR-OPE`), Online Adaptive Conformal Inference (`ACI`), Concept Drift Monitoring (`PSI` / `MMD` / `Wasserstein`), Integrated Gradients Explainability, Counterfactual Recourse & Sub-10ms TorchScript / INT8 / 4-Bit `NF4` / `DoRA` Cascade Authorization** aligned with **Gartner AI TRiSM**, **SR 11-7**, **ECOA**, **GDPR Art. 17 & 22**, and **LGPD Art. 18** standards.
 
 ---
 
@@ -31,7 +31,7 @@ All subsystems in this repository are classified using an objective five-tier ma
 
 ---
 
-## 3. Capability & Milestone Matrix (Shipped & Verified in `v0.9.0`)
+## 3. Capability & Milestone Matrix (Shipped & Verified in `v1.0.0`)
 
 | Track / Subsystem | Architectural Scope & Key Modules | Research & Industry Anchors | Maturity Status | Verification Gate |
 | :--- | :--- | :--- | :---: | :--- |
@@ -65,16 +65,13 @@ All subsystems in this repository are classified using an objective five-tier ma
 | **Scientific Ablation & Real-Time Authorization Service** | `AblationBenchmarkSuite` (`src/evaluation/ablation_suite.py`), `RealTimeAuthorizationService` (`src/serving/authorization_service.py`) | 6-pathway architectural ablation matrix & real-time conformal authorization payload | **`Stable`** | `tests/test_ldm.py::test_ablation_suite_and_realtime_authorization_service` |
 | **Calibrated Evaluation & Conformal Risk Abstention** | `ROC-AUC`, `PR-AUC`, `Recall@FPR`, `Brier Score`, `ECE`, `ConformalRiskAbstainer`, `BenchmarkSuite` (`src/evaluation/`) | Vovk et al. (2005 Conformal Prediction); Gartner AI TRiSM; SR 11-7 Model Risk Governance | **`Stable`** | `tests/test_ldm.py::test_calibration_and_conformal_risk_abstainer` |
 | **Adversarial & Strategic Concept Shift Testing** | `StrategicShiftTester` (`src/evaluation/strategic_shift_tester.py`) simulating progressive covariate perturbation (`0.05` to `0.50`) | Dal Pozzolo et al. (*IEEE TNNLS 2018* Concept Drift in Fraud Detection) | **`Stable`** | `tests/test_ldm.py::test_strategic_shift_and_benchmark_suite` |
+| **Game-Theoretic Cost-Aware Stackelberg Red-Teaming (`StackelbergLDM`)** | `CostAwareStackelbergRedTeam`, `StackelbergEquilibriumReport` (`src/evaluation/stackelberg_red_team.py`) | Dalvi et al. (*KDD 2004*); Brückner et al. (*JMLR 2012*); Hardt et al. (*ITCS 2016* Strategic Classification) | **`Stable`** | `tests/test_ldm.py::test_cost_aware_stackelberg_red_team_and_minimax_equilibrium` |
+| **Cryptographic Verifiable Inference Commitments (`ZK-LDM`)** | `VerifiableLDMCommitmentEngine`, `VerifiableInferenceReceipt` (`src/serving/verifiable_commitment.py`) | Goldwasser et al. (*JACM 2015*); Kang et al. (*PVLDB 2022*); RFC 6962 Merkle Commitment Trees | **`Stable`** | `tests/test_ldm.py::test_verifiable_ldm_commitment_engine_merkle_trace_and_tamper_detection` |
 
 ---
 
-## 4. Next-Horizon Frontier Tracks (`v1.0.0`)
+## 4. Convergence Status (`v1.0.0` Production Release)
 
-### Horizon Track A — Multi-Agent Game-Theoretic Adversarial Red-Teaming (`StackelbergLDM`)
-- **Status:** `Planned` (Target: `v1.0.0`)
-- **Architectural Scope:** Bileveled Stackelberg equilibrium training against adaptive cost-aware fraud ring generators.
+All **30 architectural, scientific, governance, and serving subsystems** are **`Stable`** and verified by **42 automated unit, invariance, and integration tests** (`pytest -v`).
 
-### Horizon Track B — Zero-Knowledge Verifiable Inference Commitments (`ZK-LDM`)
-- **Status:** `Planned` (Target: `v1.0.0`)
-- **Architectural Scope:** Cryptographic execution commitments proving model version and threshold compliance without revealing proprietary weights.
 

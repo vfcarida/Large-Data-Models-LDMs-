@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ldm-research-lab"
-version = "0.9.0"
+version = "1.0.0"
 description = "Large Data Models (LDMs) — Self-Supervised Foundation Models for Multi-Modal-Temporal-Tabular (MMTT) Financial Sequences and Calibrated Risk Classification"
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,7 +26,7 @@ keywords = [
     "pytorch-lightning",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Financial and Insurance Industry",
     "License :: OSI Approved :: MIT License",

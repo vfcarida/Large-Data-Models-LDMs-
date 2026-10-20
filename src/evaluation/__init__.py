@@ -54,6 +54,10 @@ from src.evaluation.certified_robustness import (
     RandomizedSmoothingCertifier,
     clopper_pearson_lower_bound,
 )
+from src.evaluation.stackelberg_red_team import (
+    CostAwareStackelbergRedTeam,
+    StackelbergEquilibriumReport,
+)
 from src.evaluation.benchmarks import BenchmarkSuite
 
 __all__ = [
@@ -89,5 +93,7 @@ __all__ = [
     "CertifiedRadiusReport",
     "RandomizedSmoothingCertifier",
     "clopper_pearson_lower_bound",
+    "CostAwareStackelbergRedTeam",
+    "StackelbergEquilibriumReport",
     "BenchmarkSuite",
 ]
