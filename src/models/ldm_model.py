@@ -71,6 +71,8 @@ from src.models.flow_matching import ConditionalTrajectoryFlowMatcher
 from src.models.hawkes_point_process import NeuralHawkesProcessHead
 from src.models.cross_border_alignment import CrossBorderDomainAligner
 from src.models.monotonic_constraints import MonotonicConstrainedHead
+from src.models.in_context_ldm import InContextTabularPredictor
+from src.models.survival_hazard import CompetingRisksSurvivalHead
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +269,17 @@ class LargeDataModel(nn.Module):
         self.monotonic_head = MonotonicConstrainedHead(
             input_dim=hidden_size + tabular_feature_size,
             hidden_dim=hidden_size,
+        )
+
+        # 14. Horizon Track 11: TabICL Bayesian Support-Query Cross-Attention Head
+        self.icl_predictor = InContextTabularPredictor(
+            repr_dim=hidden_size + tabular_feature_size,
+            num_heads=num_heads,
+        )
+
+        # 15. Horizon Track 12: Competing-Risks Survival & IFRS 9 / CECL Hazard Head
+        self.survival_head = CompetingRisksSurvivalHead(
+            repr_dim=hidden_size + tabular_feature_size,
         )
 
         total_params = sum(p.numel() for p in self.parameters())
@@ -807,6 +820,80 @@ class LargeDataModel(nn.Module):
         )
         joint = torch.cat([enriched, tabular_features], dim=-1)
         return self.monotonic_head(joint)
+
+    def forward_tabicl(
+        self,
+        query_keys: torch.Tensor,
+        query_values: torch.Tensor,
+        query_times: torch.Tensor,
+        query_tabular: torch.Tensor,
+        support_keys: torch.Tensor,
+        support_values: torch.Tensor,
+        support_times: torch.Tensor,
+        support_tabular: torch.Tensor,
+        support_labels: torch.Tensor,
+        query_padding_mask: Optional[torch.Tensor] = None,
+        support_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Executes Bayesian In-Context Tabular Foundation inference (`TabICL` /
+        `TabPFN v2`) returning calibrated posterior probabilities, support
+        attention weights, predictive entropy, and effective neighbor perplexity.
+        """
+        q_emb = self.get_enriched_representation(
+            packed_keys=query_keys,
+            packed_values=query_values,
+            packed_times=query_times,
+            key_padding_mask=query_padding_mask,
+            update_memory=False,
+        )
+        s_emb = self.get_enriched_representation(
+            packed_keys=support_keys,
+            packed_values=support_values,
+            packed_times=support_times,
+            key_padding_mask=support_padding_mask,
+            update_memory=False,
+        )
+        q_joint = torch.cat([q_emb, query_tabular], dim=-1)
+        s_joint = torch.cat([s_emb, support_tabular], dim=-1)
+        return self.icl_predictor(
+            query_repr=q_joint,
+            support_repr=s_joint,
+            support_labels=support_labels,
+        )
+
+    def forward_survival_hazard(
+        self,
+        packed_keys: torch.Tensor,
+        packed_values: torch.Tensor,
+        packed_times: torch.Tensor,
+        tabular_features: Optional[torch.Tensor] = None,
+        exposure_at_default: Optional[torch.Tensor] = None,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Computes discrete-time competing-risks Cumulative Incidence Functions
+        (`CIF`), survival curves, and IFRS 9 / CECL Expected Credit Loss (`ECL`).
+        """
+        enriched = self.get_enriched_representation(
+            packed_keys=packed_keys,
+            packed_values=packed_values,
+            packed_times=packed_times,
+            key_padding_mask=key_padding_mask,
+            update_memory=False,
+        )
+        if tabular_features is None:
+            tabular_features = torch.zeros(
+                enriched.size(0),
+                self.tabular_feature_size,
+                device=enriched.device,
+                dtype=enriched.dtype,
+            )
+        joint = torch.cat([enriched, tabular_features], dim=-1)
+        return self.survival_head(
+            fused_repr=joint,
+            exposure_at_default=exposure_at_default,
+        )
 
     def freeze_encoder(self) -> None:
         """Freezes the Transformer encoder parameters during linear/head probing."""

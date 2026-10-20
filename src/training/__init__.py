@@ -31,6 +31,10 @@ from src.training.continual import (
     ContinualLDMAdapter,
     ContinualAdaptationReport,
 )
+from src.training.federated_dp import (
+    DifferentiallyPrivateFedCoordinator,
+    RdpPrivacyAccountant,
+)
 
 __all__ = [
     "SSLBaseLoss",
@@ -47,4 +51,6 @@ __all__ = [
     "UnlearningCertificate",
     "ContinualLDMAdapter",
     "ContinualAdaptationReport",
+    "DifferentiallyPrivateFedCoordinator",
+    "RdpPrivacyAccountant",
 ]

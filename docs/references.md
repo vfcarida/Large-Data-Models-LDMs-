@@ -110,6 +110,18 @@ All architectural components, self-supervised objectives, numerical embeddings, 
 * **Doubly Robust Off-Policy Evaluation (DR-OPE) — Dudík, M., Langford, J., & Li, L. (2011).**
   *Doubly Robust Policy Evaluation and Learning.* **ICML 2011**, `arXiv:1103.4601`
   * **Relevance:** Anchors `DoublyRobustOffPolicyEvaluator` for unbiased counterfactual policy value estimation prior to production rollout.
+* **TabICL — Qu, Y., et al. (2025).**
+  *TabICL: A Tabular Foundation Model for In-Context Learning on Large Data.* **ICML 2025**, `arXiv:2502.05564`
+  * **Relevance:** Anchors `InContextTabularPredictor` for Bayesian support-query cross-attention over `LargeDataModel` representations.
+* **DeepHit — Lee, C., Zame, W. R., Yoon, J., & van der Schaar, M. (2018).**
+  *DeepHit: A Deep Learning Approach to Survival Analysis with Competing Risks.* **AAAI 2018**.
+  * **Relevance:** Anchors `CompetingRisksSurvivalHead` for right-censored cause-specific Cumulative Incidence Functions (`CIF`) and IFRS 9 / CECL Expected Credit Loss (`ECL`).
+* **Rényi Differential Privacy (RDP) — Mironov, I. (2017).**
+  *Rényi Differential Privacy.* **IEEE 30th Computer Security Foundations Symposium (CSF 2017)**, `arXiv:1702.07476`
+  * **Relevance:** Anchors `RdpPrivacyAccountant` and `DifferentiallyPrivateFedCoordinator` for cross-silo inter-bank federated training (`DP-FedAvg`).
+* **Randomized Smoothing — Cohen, J., Rosenfeld, E., & Kolter, Z. (2019).**
+  *Certified Adversarial Robustness via Randomized Smoothing.* **ICML 2019**, `arXiv:1902.02918`
+  * **Relevance:** Anchors `RandomizedSmoothingCertifier` and `clopper_pearson_lower_bound` for provable $\ell_2$ adversarial radius certificates.
 
 ---
 
@@ -120,4 +132,5 @@ All architectural components, self-supervised objectives, numerical embeddings, 
 * **Boston Consulting Group (BCG, 2024–2026).** *AI at Scale in Financial Services ("Risk-First, Value-Fast")* — Operational false-positive budget governance (`Recall@FPR`).
 * **McKinsey & Company / QuantumBlack (2024–2026).** *Next-Generation Financial Crime & Hybrid Foundation Risk Modeling*.
 * **RFC 6962 — Laurie, B., Langley, A., & Kasper, E. (2013).** *Certificate Transparency* — Anchors `CryptographicAuditLedger` SHA-256 hash-chain and Merkle root verification.
+
 

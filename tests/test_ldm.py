@@ -1428,3 +1428,179 @@ def test_neural_linucb_bandit_router_and_doubly_robust_ope():
     assert ope_report.dr_ci95_lower <= ope_report.doubly_robust_value <= ope_report.dr_ci95_upper
     assert ope_report.effective_sample_size_pct > 0.0
 
+
+def test_in_context_tabular_predictor_tabicl_posterior_and_entropy():
+    """Verify TabICL / TabPFN v2 Bayesian support-query cross-attention and LargeDataModel.forward_tabicl."""
+    from src.models.in_context_ldm import InContextTabularPredictor
+
+    torch.manual_seed(42)
+    predictor = InContextTabularPredictor(repr_dim=24, num_heads=4, temperature=0.20)
+
+    # Construct 8 support examples: 4 negative cluster (-1) and 4 positive cluster (+1)
+    s_neg = torch.randn(4, 24) * 0.15 - 1.0
+    s_pos = torch.randn(4, 24) * 0.15 + 1.0
+    support_repr = torch.cat([s_neg, s_pos], dim=0)
+    support_labels = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0])
+
+    # Query 0 near negative cluster, Query 1 near positive cluster
+    q_neg = torch.full((1, 24), -1.0)
+    q_pos = torch.full((1, 24), 1.0)
+    query_repr = torch.cat([q_neg, q_pos], dim=0)
+
+    out = predictor(query_repr, support_repr, support_labels)
+    probs = out["icl_probabilities"].squeeze(-1)
+    assert probs[1] > 0.70
+    assert probs[0] < 0.30
+    assert torch.allclose(
+        out["attention_weights"].sum(dim=-1), torch.ones(2), atol=1e-5
+    )
+    assert (out["effective_support_neighbors"] >= 1.0).all()
+
+    loss = predictor.compute_icl_episodic_loss(
+        query_repr, support_repr, support_labels, torch.tensor([0.0, 1.0])
+    )
+    assert loss.item() > 0.0
+
+    # Verify end-to-end integration on LargeDataModel
+    ldm = LargeDataModel(
+        vocab_size=12, hidden_size=16, num_layers=1, num_heads=4, tabular_feature_size=6
+    )
+    ldm_out = ldm.forward_tabicl(
+        query_keys=torch.randint(1, 12, (3, 6)),
+        query_values=torch.rand(3, 6) * 50.0,
+        query_times=torch.randint(1, 10, (3, 6)),
+        query_tabular=torch.randn(3, 6),
+        support_keys=torch.randint(1, 12, (6, 6)),
+        support_values=torch.rand(6, 6) * 50.0,
+        support_times=torch.randint(1, 10, (6, 6)),
+        support_tabular=torch.randn(6, 6),
+        support_labels=torch.tensor([0, 1, 0, 1, 0, 1], dtype=torch.float32),
+    )
+    assert ldm_out["icl_probabilities"].shape == (3, 1)
+
+
+def test_competing_risks_survival_head_deephit_and_ifrs9_ecl():
+    """Verify CompetingRisksSurvivalHead (DeepHit) CIF monotonicity, right-censoring loss, and IFRS 9 ECL."""
+    from src.models.survival_hazard import CompetingRisksSurvivalHead
+
+    torch.manual_seed(42)
+    head = CompetingRisksSurvivalHead(repr_dim=22, num_causes=3, num_horizons=8)
+    repr_batch = torch.randn(6, 22)
+    ead = torch.full((6,), 1000.0)
+
+    out = head(repr_batch, exposure_at_default=ead, stage1_horizon_idx=2)
+    joint_sum = out["joint_event_probs"].sum(dim=(1, 2)) + out["survival_beyond_horizon"].squeeze(-1)
+    assert torch.allclose(joint_sum, torch.ones(6), atol=1e-5)
+
+    # CIF must be monotonically non-decreasing across horizons
+    cif_diffs = out["cif"][:, :, 1:] - out["cif"][:, :, :-1]
+    assert (cif_diffs >= -1e-6).all()
+
+    # Survival curve must be monotonically non-increasing across horizons
+    surv_diffs = out["survival_curve"][:, 1:] - out["survival_curve"][:, :-1]
+    assert (surv_diffs <= 1e-6).all()
+
+    # Lifetime ECL >= Stage-1 ECL everywhere
+    assert (out["lifetime_ecl"] >= out["stage1_ecl"] - 1e-5).all()
+
+    # Right-censored + uncensored DeepHit loss
+    event_times = torch.tensor([1, 3, 5, 2, 7, 4])
+    event_causes = torch.tensor([1, 0, 2, 3, 0, 1])  # 0 = right-censored
+    loss_dict = head.compute_deephit_loss(repr_batch, event_times, event_causes)
+    assert loss_dict["total_loss"].item() > 0.0
+
+    # Verify LargeDataModel.forward_survival_hazard
+    ldm = LargeDataModel(
+        vocab_size=12, hidden_size=16, num_layers=1, num_heads=4, tabular_feature_size=6
+    )
+    surv_out = ldm.forward_survival_hazard(
+        packed_keys=torch.randint(1, 12, (4, 6)),
+        packed_values=torch.rand(4, 6) * 100.0,
+        packed_times=torch.randint(1, 10, (4, 6)),
+        tabular_features=torch.randn(4, 6),
+        exposure_at_default=torch.tensor([500.0, 1000.0, 2500.0, 750.0]),
+    )
+    assert surv_out["cif"].shape == (4, 3, 12)
+    assert surv_out["lifetime_ecl"].shape == (4, 1)
+
+
+def test_federated_dp_coordinator_and_renyi_privacy_accountant():
+    """Verify DP-FedAvg per-client L2 norm clipping and Rényi Differential Privacy (RDP) accounting."""
+    import copy
+    from src.training.federated_dp import (
+        DifferentiallyPrivateFedCoordinator,
+        RdpPrivacyAccountant,
+    )
+
+    accountant = RdpPrivacyAccountant(target_delta=1e-5)
+    eps1, _ = accountant.step(noise_multiplier=1.2, sample_rate=0.5)
+    eps2, _ = accountant.step(noise_multiplier=1.2, sample_rate=0.5)
+    assert eps1 > 0.0
+    assert eps2 > eps1
+
+    torch.manual_seed(42)
+    global_model = torch.nn.Sequential(
+        torch.nn.Linear(10, 8), torch.nn.GELU(), torch.nn.Linear(8, 1)
+    )
+    coordinator = DifferentiallyPrivateFedCoordinator(
+        global_model=global_model,
+        clip_norm_c=0.50,
+        noise_multiplier=1.0,
+        target_delta=1e-5,
+    )
+
+    base_params = coordinator.extract_trainable_parameters(global_model)
+    client_deltas = []
+    for k in range(3):
+        client_m = copy.deepcopy(global_model)
+        with torch.no_grad():
+            for p in client_m.parameters():
+                p.add_(torch.randn_like(p) * (1.5 + k))
+        client_deltas.append(coordinator.compute_client_delta(base_params, client_m))
+
+    report = coordinator.aggregate_and_update(client_deltas, rng_seed=99)
+    assert report.round_index == 1
+    assert report.num_clients == 3
+    assert report.mean_clipped_l2_norm <= 0.50 + 1e-5
+    assert report.cumulative_epsilon > 0.0
+
+
+def test_randomized_smoothing_certified_l2_robustness():
+    """Verify RandomizedSmoothingCertifier and exact Clopper-Pearson certified L2 radii."""
+    from src.evaluation.certified_robustness import (
+        RandomizedSmoothingCertifier,
+        clopper_pearson_lower_bound,
+    )
+
+    p_low_all = clopper_pearson_lower_bound(successes=32, trials=32, alpha=0.01)
+    p_low_half = clopper_pearson_lower_bound(successes=16, trials=32, alpha=0.01)
+    assert p_low_all > 0.85
+    assert p_low_half < 0.50
+
+    torch.manual_seed(42)
+    ldm = LargeDataModel(
+        vocab_size=12, hidden_size=16, num_layers=1, num_heads=4, tabular_feature_size=6
+    )
+    # Bias fusion head output strongly positive so smoothed predictions are deterministic class 1
+    with torch.no_grad():
+        ldm.fusion_head.final_projection.bias.fill_(8.0)
+
+    certifier = RandomizedSmoothingCertifier(
+        noise_sigma=0.30,
+        num_mc_samples=24,
+        confidence_alpha=0.01,
+    )
+    report = certifier.certify_batch(
+        model=ldm,
+        packed_keys=torch.randint(1, 12, (4, 6)),
+        packed_values=torch.rand(4, 6) * 20.0,
+        packed_times=torch.randint(1, 10, (4, 6)),
+        tabular_features=torch.randn(4, 6),
+        rng_seed=42,
+    )
+    assert report.total_evaluated == 4
+    assert report.certified_count == 4
+    assert report.mean_certified_l2_radius > 0.25
+    assert all(pred == 1 for pred in report.smoothed_predictions)
+
+

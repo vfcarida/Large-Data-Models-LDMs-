@@ -49,6 +49,11 @@ from src.evaluation.audit_ledger import (
     TamperEvidentAuditLedger,
     StatisticalLogitWatermarker,
 )
+from src.evaluation.certified_robustness import (
+    CertifiedRadiusReport,
+    RandomizedSmoothingCertifier,
+    clopper_pearson_lower_bound,
+)
 from src.evaluation.benchmarks import BenchmarkSuite
 
 __all__ = [
@@ -81,5 +86,8 @@ __all__ = [
     "AuditRecord",
     "TamperEvidentAuditLedger",
     "StatisticalLogitWatermarker",
+    "CertifiedRadiusReport",
+    "RandomizedSmoothingCertifier",
+    "clopper_pearson_lower_bound",
     "BenchmarkSuite",
 ]

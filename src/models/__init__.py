@@ -63,6 +63,8 @@ from src.models.monotonic_constraints import (
     MonotonicityCertificationAuditor,
     MonotonicityAuditReport,
 )
+from src.models.in_context_ldm import InContextTabularPredictor
+from src.models.survival_hazard import CompetingRisksSurvivalHead
 from src.models.ldm_model import LargeDataModel
 
 __all__ = [
@@ -93,5 +95,7 @@ __all__ = [
     "MonotonicConstrainedHead",
     "MonotonicityCertificationAuditor",
     "MonotonicityAuditReport",
+    "InContextTabularPredictor",
+    "CompetingRisksSurvivalHead",
     "LargeDataModel",
 ]
